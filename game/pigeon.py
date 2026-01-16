@@ -9,6 +9,7 @@ class Pigeon:
         self.total_turns = 2 # For calculating position
         self.returning = False
         self.arrived = False
+        self.payload = None # Data collected (e.g. report)
 
     def update(self):
         if self.turns_to_reach > 0:

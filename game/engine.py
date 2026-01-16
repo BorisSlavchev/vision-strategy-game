@@ -24,6 +24,7 @@ class GameState:
         self.pigeons = []
         self.pigeon_limit = [1, 1] 
         self.turn_count = 1
+        self.latest_report = [None, None] # Stores only the most recent report for each player
         
         # Game modes: "God", "Fog", "Realistic"
         self.mode = mode
@@ -46,7 +47,13 @@ class GameState:
 
         self.game_over = False
         self.winner = None
+        
+        # Add starting units
+        self.units.append(Unit(0, "Soldier", self.player_castle_node, count=10))
+        self.units.append(Unit(1, "Soldier", self.enemy_castle_node, count=10))
+        
         self.update_visibility()
+        self.merge_units()
 
     def get_node(self, x, y):
         for node in self.nodes:
@@ -56,6 +63,26 @@ class GameState:
 
     def get_units_at(self, node):
         return [unit for unit in self.units if unit.node == node]
+
+    def get_unit_report(self, unit):
+        """Returns dict with unit information for report display"""
+        report = {
+            'position': (unit.node.x, unit.node.y),
+            'count': unit.count,
+            'friendly_adjacent': [],
+            'enemy_adjacent': []
+        }
+        
+        for neighbor in unit.node.neighbors:
+            units_at_neighbor = self.get_units_at(neighbor)
+            for u in units_at_neighbor:
+                info = {'pos': (neighbor.x, neighbor.y), 'count': u.count}
+                if u.owner == unit.owner:
+                    report['friendly_adjacent'].append(info)
+                else:
+                    report['enemy_adjacent'].append(info)
+        
+        return report
 
     def recruit_unit(self, player_id):
         cost = 10 
@@ -72,6 +99,20 @@ class GameState:
             self.resources[player_id]["gold"] -= cost
             return True
         return False
+    
+    def merge_units(self):
+        """Merges all units of the same owner on the same node"""
+        for node in self.nodes:
+            for owner in [0, 1]:
+                units_here = [u for u in self.get_units_at(node) if u.owner == owner]
+                if len(units_here) > 1:
+                    total_count = sum(u.count for u in units_here)
+                    # Keep the first unit, update its count, remove the others
+                    main_unit = units_here[0]
+                    main_unit.count = total_count
+                    for extra_unit in units_here[1:]:
+                        if extra_unit in self.units:
+                            self.units.remove(extra_unit)
 
     def send_pigeon(self, player_id, unit, command_type, data=None):
         active_pigeons = [p for p in self.pigeons if p.owner == player_id]
@@ -143,7 +184,7 @@ class GameState:
                     r_d = random.randint(1, 6)
                     if r_d > r_a: d_survivors += 1 # A survivor died
                     elif r_a > r_d: a_temp_survivors += 1 # D died
-                    else: d_temp_survivors += 1; a_temp_survivors += 1
+                    else: d_survivors += 1; a_temp_survivors += 1
                 a_survivors = a_temp_survivors + (a_survivors - num_extra)
             
             # Any units that didn't fight at all because other side was fully engaged
@@ -184,7 +225,15 @@ class GameState:
                 for node in self.nodes:
                     self.visible_nodes[p].add(node)
                 continue
+            
+            if self.mode == "Realistic":
+                # In realistic mode, only see buildings owned by the player
+                for node in self.nodes:
+                    if node.structure and node.structure_owner == p:
+                        self.visible_nodes[p].add(node)
+                continue
                 
+            # Fog mode: see units and their neighbors
             for unit in self.units:
                 if unit.owner == p:
                     self.visible_nodes[p].add(unit.node)
@@ -199,34 +248,50 @@ class GameState:
                 enemies = [u for u in self.get_units_at(target_node) if u.owner != unit.owner]
                 if not enemies:
                     unit.node = target_node
+                    # Merge with existing friendly units at target
+                    friendlies = [u for u in self.get_units_at(target_node) if u.owner == unit.owner and u != unit]
+                    if friendlies:
+                        friendlies[0].count += unit.count
+                        if unit in self.units:
+                            self.units.remove(unit)
         elif command["type"] == "attack":
             target_node = command["data"]
             if target_node in unit.node.neighbors:
                 self.resolve_combat(unit.node, target_node)
         elif command["type"] == "build":
             if unit.node.structure is None:
-                # Build outpost if they have enough resources or soldiers
-                # Let's say it costs 20 gold
                 owner = unit.owner
                 if self.resources[owner]["gold"] >= 20:
                     self.resources[owner]["gold"] -= 20
                     unit.node.structure = "Outpost"
                     unit.node.structure_owner = owner
+        elif command["type"] == "report":
+            return self.get_unit_report(unit)
+        return None
 
     def end_turn(self):
+        # Clear previous report for the player whose turn has ended
+        self.latest_report[self.turn] = None
+        
         # Update pigeons
         for pigeon in self.pigeons[:]:
             if pigeon.owner == self.turn:
                 pigeon.update()
                 if pigeon.arrived:
                     if not pigeon.returning:
+                        # Pigeon arrived at unit, execute commands
                         for unit in pigeon.units:
                             if unit in self.units:
-                                self.execute_command(unit, pigeon.command)
+                                result = self.execute_command(unit, pigeon.command)
+                                if result:
+                                    pigeon.payload = result
                         pigeon.returning = True
                         pigeon.arrived = False
                         pigeon.turns_to_reach = 2 
                     else:
+                        # Pigeon returned to castle, deliver report if any
+                        if pigeon.payload:
+                            self.latest_report[pigeon.owner] = pigeon.payload
                         self.pigeons.remove(pigeon)
 
         # Resource Generation (Structures only)
@@ -242,6 +307,9 @@ class GameState:
         # Base income
         self.resources[0]["gold"] += 5
         self.resources[1]["gold"] += 5
+
+        # Merge units to clean up map
+        self.merge_units()
 
         # Reset movement
         for unit in self.units:
