@@ -1,15 +1,23 @@
-import pygame
+import os
 import sys
+import warnings
+
+# Suppress pygame startup messages and AVX2 warnings
+os.environ['PYGAME_HIDE_SUPPORT_PROMPT'] = 'hide'
+# Suppress the AVX2 warning from being printed to stderr
+warnings.filterwarnings("ignore", message="Your system is avx2 capable")
+
+import pygame
 from game.engine import GameState
 
 # Constants
-SCREEN_WIDTH = 1100  # Increased for 3-panel layout
+SCREEN_WIDTH = 1100
 SCREEN_HEIGHT = 800
 GRID_SIZE = 3
 CELL_SIZE = 120
 LEFT_PANEL_WIDTH = 250
-RIGHT_PANEL_WIDTH = 300
-MAP_WIDTH = SCREEN_WIDTH - LEFT_PANEL_WIDTH - RIGHT_PANEL_WIDTH
+REPORT_PANEL_WIDTH = 300
+MAP_WIDTH = SCREEN_WIDTH - LEFT_PANEL_WIDTH - REPORT_PANEL_WIDTH
 GRID_OFFSET_X = LEFT_PANEL_WIDTH + (MAP_WIDTH - (GRID_SIZE * (CELL_SIZE + 20))) // 2
 GRID_OFFSET_Y = 200
 NODE_RADIUS = 50
@@ -21,7 +29,7 @@ class UIState(Enum):
     PLAYING = 3
     GAMEOVER = 4
 
-from game.ui_components import Button, ScrollPanel, UnitCard, CommandPanel
+from game.ui_components import Button
 
 # Colors
 WHITE = (255, 255, 255)
@@ -60,7 +68,14 @@ class ContextMenu:
     def get_rect(self):
         if not self.options:
             return pygame.Rect(0, 0, 0, 0)
-        width = max(self.font.size(opt["label"])[0] for opt in self.options) + self.padding * 2
+        
+        def get_label(opt):
+            label = opt["label"]
+            if opt.get("is_splitter"):
+                label = f"{opt['label']} {opt.get('amount', 0)} (Scroll to adjust)"
+            return label
+
+        width = max(self.font.size(get_label(opt))[0] for opt in self.options) + self.padding * 2
         height = len(self.options) * self.option_height
         return pygame.Rect(self.pos[0], self.pos[1], width, height)
     
@@ -80,10 +95,14 @@ class ContextMenu:
             if opt_rect.collidepoint(pygame.mouse.get_pos()):
                 pygame.draw.rect(screen, GRAY, opt_rect)
             
-            text_surf = self.font.render(opt["label"], True, BLACK)
+            label = opt["label"]
+            if opt.get("is_splitter"):
+                label = f"{opt['label']} {opt.get('amount', 0)} (Scroll to adjust)"
+            
+            text_surf = self.font.render(label, True, BLACK)
             screen.blit(text_surf, (self.pos[0] + self.padding, y + 5))
             
-    def handle_click(self, pos):
+    def handle_click(self, pos, hide_automatically=True):
         if not self.visible:
             return None
         
@@ -97,7 +116,8 @@ class ContextMenu:
             opt_rect = pygame.Rect(self.pos[0], y, rect.width, self.option_height)
             if opt_rect.collidepoint(pos):
                 result = opt
-                self.hide()
+                if hide_automatically:
+                    self.hide()
                 return result
         
         self.hide()
@@ -117,7 +137,6 @@ class Game:
         self.ui_state = UIState.MAIN_MENU
         self.selected_mode = "God"
         self.state = None # Initialized when game starts
-        self.selected_unit = None
         self.mode_options = ["God", "Fog", "Realistic"]
         self.context_menu = ContextMenu(self.font)
         
@@ -136,66 +155,13 @@ class Game:
             Button(SCREEN_WIDTH//2 - 100, 370, button_w, button_h, "Mode: Realistic", self.font),
             Button(SCREEN_WIDTH//2 - 100, 500, button_w, button_h, "Back", self.ui_font)
         ]
-        
-        # Unit Panels (one for each team) & Command Panel
-        self.player_unit_panel = ScrollPanel(SCREEN_WIDTH - RIGHT_PANEL_WIDTH, 0, RIGHT_PANEL_WIDTH, 300, "Player Units", self.ui_font)
-        self.enemy_unit_panel = ScrollPanel(SCREEN_WIDTH - RIGHT_PANEL_WIDTH, 300, RIGHT_PANEL_WIDTH, 250, "Enemy Units", self.ui_font)
-        self.cmd_panel = CommandPanel(SCREEN_WIDTH - RIGHT_PANEL_WIDTH, 550, RIGHT_PANEL_WIDTH, 250, self.font)
 
     def start_new_game(self):
         self.state = GameState(mode=self.selected_mode)
         self.ui_state = UIState.PLAYING
-        self.selected_unit = None
-        self.update_unit_panel()
 
     def update_unit_panel(self):
-        self.player_unit_panel.items = []
-        self.enemy_unit_panel.items = []
-        if not self.state: return
-        
-        # Player units (team 0)
-        player_units = [u for u in self.state.units if u.owner == 0]
-        for u in player_units:
-            mask = self.state.mode == "Realistic" and u.node not in self.state.visible_nodes[self.state.turn]
-            card = UnitCard(0, 0, RIGHT_PANEL_WIDTH - 20, 60, u, self.font, mask_info=mask)
-            if u == self.selected_unit:
-                card.selected = True
-            self.player_unit_panel.add_item(card)
-        
-        # Enemy units (team 1)
-        enemy_units = [u for u in self.state.units if u.owner == 1]
-        for u in enemy_units:
-            mask = self.state.mode == "Realistic" and u.node not in self.state.visible_nodes[self.state.turn]
-            card = UnitCard(0, 0, RIGHT_PANEL_WIDTH - 20, 60, u, self.font, mask_info=mask)
-            if u == self.selected_unit:
-                card.selected = True
-            self.enemy_unit_panel.add_item(card)
-            
-        # Update Command Panel
-        if self.selected_unit:
-            commands = []
-            node = self.selected_unit.node
-            
-            # Local actions
-            if node.structure == "Castle" and node.structure_owner == self.state.turn:
-                commands.append({"label": "Recruit (10G)", "command": "recruit", "data": node, "cols": 1})
-            
-            if node.structure is None:
-                commands.append({"label": "Build Outpost (20G)", "command": "build", "data": None, "cols": 1})
-            
-            commands.append({"label": "Report", "command": "report", "data": None, "cols": 1})
-            
-            # Neighbors - Move in 3 cols
-            for neighbor in node.neighbors:
-                commands.append({"label": f"Move ({neighbor.x},{neighbor.y})", "command": "move", "data": neighbor, "cols": 3})
-            
-            # Attack in 3 cols
-            for neighbor in node.neighbors:
-                commands.append({"label": f"Attack ({neighbor.x},{neighbor.y})", "command": "attack", "data": neighbor, "cols": 3})
-                
-            self.cmd_panel.set_commands(commands)
-        else:
-            self.cmd_panel.visible = False
+        pass # Method removed as per plan
 
     def get_node_pos(self, node):
         x = GRID_OFFSET_X + node.x * (CELL_SIZE + 20) + CELL_SIZE // 2
@@ -335,9 +301,6 @@ class Game:
             # Show unit count
             count_text = self.font.render(str(unit.count), True, WHITE)
             self.screen.blit(count_text, (nx - 10, ny - 10))
-            
-            if unit == self.selected_unit:
-                pygame.draw.circle(self.screen, YELLOW, (nx, ny), NODE_RADIUS - 5, 2)
 
         # Draw pigeons
         self.draw_pigeons()
@@ -355,8 +318,11 @@ class Game:
         turn_text = f"Turn: {'Player (Blue)' if self.state.turn == 0 else 'Enemy (Red)'}"
         self.screen.blit(self.font.render(turn_text, True, BLUE if self.state.turn == 0 else RED), (10, 80))
         
+        turn_count_text = f"Turn #: {self.state.turn_count}"
+        self.screen.blit(self.font.render(turn_count_text, True, BLACK), (10, 110))
+        
         # Resources UI
-        res_y = 120
+        res_y = 150
         self.screen.blit(self.font.render("Resources:", True, BLACK), (10, res_y))
         res_y += 25
         res = self.state.resources[self.state.turn]
@@ -365,7 +331,7 @@ class Game:
             res_y += 20
             
         # Pigeons UI
-        pigeon_y = 250
+        pigeon_y = 300
         active_pigeons = [p for p in self.state.pigeons if p.owner == self.state.turn]
         self.screen.blit(self.font.render(f"Pigeons: {len(active_pigeons)}/{self.state.pigeon_limit[self.state.turn]}", True, BLACK), (10, pigeon_y))
         pigeon_y += 25
@@ -376,11 +342,9 @@ class Game:
             pigeon_y += 20
             
         # Controls Hint
-        ctrl_y = 450
+        ctrl_y = 500
         controls = [
-            "L-Click Map: Select unit",
-            "R-Click Map: Order Menu",
-            "Unit Panel: Quick actions",
+            "R-Click Tile: Issue Order",
             "SPACE: End Turn",
             "ESC: Main Menu"
         ]
@@ -389,10 +353,79 @@ class Game:
             ctrl_y += 20
             self.screen.blit(self.font.render(ctrl, True, BLACK), (10, ctrl_y))
 
-        # Draw Unit Panels (Right)
-        self.player_unit_panel.draw(self.screen)
-        self.enemy_unit_panel.draw(self.screen)
-        self.cmd_panel.draw(self.screen)
+        # Draw Report Panel (Right)
+        pygame.draw.rect(self.screen, GRAY, (SCREEN_WIDTH - REPORT_PANEL_WIDTH, 0, REPORT_PANEL_WIDTH, SCREEN_HEIGHT))
+        pygame.draw.line(self.screen, BLACK, (SCREEN_WIDTH - REPORT_PANEL_WIDTH, 0), (SCREEN_WIDTH - REPORT_PANEL_WIDTH, SCREEN_HEIGHT), 2)
+        
+        report_header = f"{'Player' if self.state.turn == 0 else 'Enemy'} Reports"
+        header_surf = self.ui_font.render(report_header, True, BLACK)
+        self.screen.blit(header_surf, (SCREEN_WIDTH - REPORT_PANEL_WIDTH + 10, 10))
+        
+        # Draw accumulated reports for current player
+        current_reports = self.state.reports[self.state.turn]
+        report_y = 50
+        
+        # Helper for word wrapping
+        def draw_wrapped_text(surface, text, x, y, max_width, font, color):
+            words = text.split(' ')
+            line = ""
+            for word in words:
+                test_line = line + word + " "
+                if font.size(test_line)[0] < max_width:
+                    line = test_line
+                else:
+                    surface.blit(font.render(line, True, color), (x, y))
+                    y += 18
+                    line = word + " "
+            surface.blit(font.render(line, True, color), (x, y))
+            return y + 18
+
+        # Show newest at top
+        for report in reversed(current_reports):
+            # Dynamic height calculation
+            num_sightings = len(report.get('friendly_adjacent', [])) + len(report.get('enemy_adjacent', []))
+            base_h = 45 if 'message' in report else 45 + (1 if num_sightings > 0 else 0) * 20
+            if not 'message' in report:
+                base_h += 20 # Strength line
+                base_h += num_sightings * 18
+            
+            box_h = max(60, base_h + 10)
+            if report_y + box_h > SCREEN_HEIGHT: break
+            
+            box_rect = pygame.Rect(SCREEN_WIDTH - REPORT_PANEL_WIDTH + 5, report_y, REPORT_PANEL_WIDTH - 10, box_h)
+            pygame.draw.rect(self.screen, WHITE, box_rect)
+            pygame.draw.rect(self.screen, BLACK, box_rect, 1)
+            
+            y = report_y + 5
+            x = SCREEN_WIDTH - REPORT_PANEL_WIDTH + 10
+            max_txt_w = REPORT_PANEL_WIDTH - 20
+            
+            # Header: Turn and Pos
+            turn_val = report.get('turn_received', '?')
+            header_text = f"Turn {turn_val} | Pos: ({report['position'][0]}, {report['position'][1]})"
+            self.screen.blit(pygame.font.SysFont("Arial", 14, bold=True).render(header_text, True, BLACK), (x, y))
+            y += 20
+            
+            if 'message' in report:
+                y = draw_wrapped_text(self.screen, report['message'], x, y, max_txt_w, self.font, RED)
+            else:
+                self.screen.blit(self.font.render(f"Strength: {report['count']}", True, BLACK), (x, y))
+                y += 20
+                
+                # Sightings with coordinates
+                for f in report.get('friendly_adjacent', []):
+                    txt = f"Ally: {f['count']} @({f['pos'][0]},{f['pos'][1]})"
+                    self.screen.blit(self.font.render(txt, True, BLUE), (x, y))
+                    y += 18
+                for e in report.get('enemy_adjacent', []):
+                    txt = f"ENEMY: {e['count']} @({e['pos'][0]},{e['pos'][1]})"
+                    self.screen.blit(self.font.render(txt, True, RED), (x, y))
+                    y += 18
+            
+            report_y += box_h + 5
+
+        # Draw context menu on top
+        self.context_menu.draw(self.screen)
 
         if self.state.game_over:
             overlay = pygame.Surface((SCREEN_WIDTH, SCREEN_HEIGHT), pygame.SRCALPHA)
@@ -402,53 +435,6 @@ class Game:
             text_surf = self.ui_font.render(winner_text, True, GREEN)
             self.screen.blit(text_surf, (SCREEN_WIDTH//2 - 150, SCREEN_HEIGHT//2))
 
-        # Draw context menu on top
-        self.context_menu.draw(self.screen)
-        
-        # Draw Report Overlay if latest exists
-        report_data = self.state.latest_report[self.state.turn]
-        if report_data:
-            self.draw_report_overlay(report_data)
-
-    def draw_report_overlay(self, data):
-        # Compact report box in the bottom right of the map area
-        box_w, box_h = 280, 200
-        box_x = LEFT_PANEL_WIDTH + MAP_WIDTH - box_w - 10
-        box_y = SCREEN_HEIGHT - box_h - 10
-        
-        # Draw background and border
-        pygame.draw.rect(self.screen, (245, 245, 245), (box_x, box_y, box_w, box_h))
-        pygame.draw.rect(self.screen, BLACK, (box_x, box_y, box_w, box_h), 2)
-        
-        # Header
-        header_font = pygame.font.SysFont("Arial", 16, bold=True)
-        self.screen.blit(header_font.render("LATEST RECON REPORT", True, BLACK), (box_x + 10, box_y + 10))
-        
-        y = box_y + 35
-        self.screen.blit(self.font.render(f"Pos: ({data['position'][0]}, {data['position'][1]})", True, BLACK), (box_x + 10, y))
-        y += 20
-        self.screen.blit(self.font.render(f"Strength: {data['count']}", True, BLACK), (box_x + 10, y))
-        y += 25
-        
-        # Surroundings (shorter labels for compact box)
-        self.screen.blit(header_font.render("SURROUNDINGS:", True, DARK_GRAY), (box_x + 10, y))
-        y += 20
-        
-        findings = []
-        for f in data['friendly_adjacent']:
-            findings.append((f"Ally: {f['count']} unit @{f['pos']}", BLUE))
-        for e in data['enemy_adjacent']:
-            findings.append((f"ENEMY: {e['count']} unit @{e['pos']}", RED))
-            
-        if findings:
-            for text, color in findings[:4]: # Limit to 4 lines
-                self.screen.blit(self.font.render(text, True, color), (box_x + 15, y))
-                y += 18
-        else:
-            self.screen.blit(self.font.render("Area clear", True, DARK_GRAY), (box_x + 15, y))
-            
-        # Close instruction
-        self.screen.blit(pygame.font.SysFont("Arial", 12).render("Click map to dismiss", True, DARK_GRAY), (box_x + 10, box_y + box_h - 18))
 
 
     def draw(self):
@@ -525,146 +511,85 @@ class Game:
                     self.handle_settings_events(event)
                 elif self.ui_state == UIState.PLAYING:
                     if not self.state.game_over:
-                        # Handle Command Panel events first
-                        cmd_result = self.cmd_panel.handle_event(event)
-                        if cmd_result:
-                            cmd_type = cmd_result["command"]
-                            cmd_data = cmd_result.get("data")
-                            
-                            # Crucial check: Only allow commands if it's our unit and our turn
-                            if self.selected_unit and self.selected_unit.owner == self.state.turn:
-                                if cmd_type == "recruit":
-                                    self.state.recruit_unit(self.state.turn)
-                                    self.update_unit_panel()
-                                elif cmd_type == "report":
-                                    self.state.send_pigeon(self.state.turn, self.selected_unit, "report", None)
-                                    self.selected_unit = None
-                                    self.update_unit_panel()
-                                elif cmd_type == "build":
-                                    self.state.send_pigeon(self.state.turn, self.selected_unit, "build", None)
-                                    self.selected_unit = None
-                                    self.update_unit_panel()
-                                elif self.selected_unit:
-                                    self.state.send_pigeon(self.state.turn, self.selected_unit, cmd_type, cmd_data)
-                                    self.selected_unit = None
-                                    self.update_unit_panel()
-
-                        # Handle Unit Panel events (both panels)
-                        panel_result = self.player_unit_panel.handle_event(event)
-                        if isinstance(panel_result, UnitCard):
-                            self.selected_unit = panel_result.unit
-                            self.update_unit_panel()
-                        
-                        panel_result = self.enemy_unit_panel.handle_event(event)
-                        if isinstance(panel_result, UnitCard):
-                            self.selected_unit = panel_result.unit
-                            self.update_unit_panel()
-
                         if event.type == pygame.MOUSEBUTTONDOWN:
                             if event.button == 1: # Left click
-                                # Check context menu first
-                                menu_result = self.context_menu.handle_click(event.pos)
-                                if menu_result:
-                                    # Execute the command from menu
-                                    cmd_type = menu_result["command"]
-                                    cmd_data = menu_result.get("data")
-                                    
-                                    if cmd_type == "recruit":
-                                        self.state.recruit_unit(self.state.turn)
-                                        self.update_unit_panel()
-                                    elif cmd_type == "end_turn":
-                                        self.state.end_turn()
-                                        self.selected_unit = None
-                                        self.update_unit_panel()
-                                    elif cmd_type == "cycle_mode":
-                                        curr_idx = self.mode_options.index(self.state.mode)
-                                        self.state.mode = self.mode_options[(curr_idx + 1) % len(self.mode_options)]
-                                        self.state.update_visibility()
-                                    elif cmd_type == "recall_pigeon":
-                                        if cmd_data in self.state.pigeons:
-                                            self.state.pigeons.remove(cmd_data)
-                                    elif cmd_type == "info":
-                                        pass 
-                                    elif self.selected_unit:
-                                        self.state.send_pigeon(self.state.turn, self.selected_unit, cmd_type, cmd_data)
-                                        self.selected_unit = None
-                                        self.update_unit_panel()
-                                elif not self.context_menu.visible:
-                                    # Clip mouse interaction to map area
-                                    if LEFT_PANEL_WIDTH < event.pos[0] < SCREEN_WIDTH - RIGHT_PANEL_WIDTH:
-                                        node = self.get_node_at_mouse(event.pos)
-                                        if node:
-                                            units_here = self.state.get_units_at(node)
-                                            friendly_units = [u for u in units_here if u.owner == self.state.turn]
-                                            
-                                            if friendly_units:
-                                                self.selected_unit = friendly_units[0]
-                                            else:
-                                                self.selected_unit = None
-                                            self.update_unit_panel()
-                                        else:
-                                            self.selected_unit = None
-                                            self.update_unit_panel()
+                                if self.context_menu.visible:
+                                    # Don't hide yet if we might transition to a sub-menu
+                                    menu_result = self.context_menu.handle_click(event.pos, hide_automatically=False)
+                                    if menu_result:
+                                        if menu_result.get("prepare_split"):
+                                            source_node, target_node = menu_result["data"]
+                                            self.context_menu.options = [
+                                                {"label": f"Move All -> ({target_node.x}, {target_node.y})", "command": "move_attack", "data": (source_node, target_node)},
+                                                {"label": "Split & Move:", "command": "move_attack", "data": (source_node, target_node), "is_splitter": True, "amount": 10},
+                                                {"label": "Cancel", "command": "hide"}
+                                            ]
+                                            # Keep menu visible for sub-options
+                                            continue
+                                        
+                                        # If it wasn't a transition, hide it now
+                                        self.context_menu.hide()
+
+                                        cmd = menu_result["command"]
+                                        if cmd == "hide":
+                                            self.context_menu.hide()
+                                            continue
+
+                                        data = menu_result.get("data")
+                                        if cmd == "recruit":
+                                            self.state.recruit_unit(self.state.turn)
+                                        elif cmd == "report":
+                                            self.state.send_pigeon_to_tile(self.state.turn, data, "report", None)
+                                        elif cmd == "move_attack":
+                                            source_node, target_node = data
+                                            count = menu_result.get("amount")
+                                            self.state.send_pigeon_to_tile(self.state.turn, source_node, "move_attack", target_node, count=count)
+                                        elif cmd == "build":
+                                            self.state.send_pigeon_to_tile(self.state.turn, data, "build", None)
                                 else:
+                                    # Regular click dismisses menu
                                     self.context_menu.hide()
-                                    
+
                             elif event.button == 3: # Right click
                                 # Clip mouse interaction to map area
-                                if LEFT_PANEL_WIDTH < event.pos[0] < SCREEN_WIDTH - RIGHT_PANEL_WIDTH:
-                                    self.context_menu.hide()
+                                if LEFT_PANEL_WIDTH < event.pos[0] < SCREEN_WIDTH - REPORT_PANEL_WIDTH:
                                     node = self.get_node_at_mouse(event.pos)
-                                    
                                     if node:
                                         options = []
-                                        units_here = self.state.get_units_at(node)
-                                        friendly_units = [u for u in units_here if u.owner == self.state.turn]
                                         
-                                        if friendly_units:
-                                            self.selected_unit = friendly_units[0]
-                                            self.update_unit_panel()
-                                            options.append({"label": f"Unit at ({node.x}, {node.y})", "command": "info", "data": None})
-                                            if node.structure == "Castle":
-                                                options.append({"label": "Recruit Soldier (10 Gold)", "command": "recruit", "data": node})
-                                            
-                                            if self.selected_unit.node == node:
-                                                if node.structure is None:
-                                                    options.append({"label": "Build Outpost", "command": "build", "data": None})
-                                                options.append({"label": "Report Info", "command": "report", "data": None})
-
-                                        elif self.selected_unit and node != self.selected_unit.node:
-                                            if node in self.selected_unit.node.neighbors:
-                                                options.append({
-                                                    "label": f"Move to ({node.x}, {node.y})",
-                                                    "command": "move",
-                                                    "data": node
-                                                })
-                                                options.append({
-                                                    "label": f"Attack at ({node.x}, {node.y})",
-                                                    "command": "attack",
-                                                    "data": node
-                                                })
+                                        # Uniform commands for all tiles to maintain uncertainty
+                                        options.append({"label": f"Send Report to ({node.x}, {node.y})", "command": "report", "data": node})
                                         
-                                        if node.structure == "Castle" and node == (self.state.player_castle_node if self.state.turn == 0 else self.state.enemy_castle_node):
-                                            if not any(opt["command"] == "recruit" for opt in options):
-                                                options.append({"label": "Recruit Soldier (10 Gold)", "command": "recruit", "data": node})
-
+                                        options.append({"label": f"Build Outpost at ({node.x}, {node.y})", "command": "build", "data": node})
+                                        
+                                        for neighbor in node.neighbors:
+                                            options.append({
+                                                "label": f"Order Move/Attack -> ({neighbor.x}, {neighbor.y})",
+                                                "command": "move_attack",
+                                                "prepare_split": True,
+                                                "data": (node, neighbor)
+                                            })
+                                        
+                                        # Recruitment if at castle (This is static info, so it's fine to show)
+                                        castle = self.state.player_castle_node if self.state.turn == 0 else self.state.enemy_castle_node
+                                        if node == castle:
+                                            options.append({"label": "Recruit Soldier (10G)", "command": "recruit", "data": node})
+                                        
                                         if options:
                                             self.context_menu.show(event.pos, options, node)
                                     else:
-                                        # Global actions
-                                        options = []
-                                        options.append({"label": f"End Turn ({'Player' if self.state.turn == 0 else 'Enemy'})", "command": "end_turn", "data": None})
-                                        self.context_menu.show(event.pos, options, None)
-                        
+                                        self.context_menu.hide()
+                            elif event.button == 4 or event.button == 5: # Scroll wheel
+                                if self.context_menu.visible:
+                                    change = 1 if event.button == 4 else -1
+                                    for opt in self.context_menu.options:
+                                        if opt.get("is_splitter"):
+                                            opt["amount"] = max(1, opt["amount"] + change)
+
                         if event.type == pygame.KEYDOWN:
-                            if event.key == pygame.K_r:
-                                self.state.recruit_unit(self.state.turn)
-                                self.update_unit_panel()
-                            elif event.key == pygame.K_SPACE:
+                            if event.key == pygame.K_SPACE:
                                 self.state.end_turn()
-                                self.selected_unit = None
                                 self.context_menu.hide()
-                                self.update_unit_panel()
 
             self.draw()
             self.clock.tick(60)

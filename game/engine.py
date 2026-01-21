@@ -24,7 +24,7 @@ class GameState:
         self.pigeons = []
         self.pigeon_limit = [1, 1] 
         self.turn_count = 1
-        self.latest_report = [None, None] # Stores only the most recent report for each player
+        self.reports = [[], []] # Stores list of reports for each player
         
         # Game modes: "God", "Fog", "Realistic"
         self.mode = mode
@@ -120,6 +120,19 @@ class GameState:
             source = self.player_castle_node if player_id == 0 else self.enemy_castle_node
             # Target is the unit's current node (where the pigeon will find them)
             new_pigeon = Pigeon(player_id, source, unit.node, {"type": command_type, "data": data}, units=[unit])
+            self.pigeons.append(new_pigeon)
+            return True
+        return False
+
+    def send_pigeon_to_tile(self, player_id, target_node, command_type, data, count=None):
+        """Sends a pigeon to a specific tile to issue orders to any friendly units there."""
+        active_pigeons = [p for p in self.pigeons if p.owner == player_id]
+        if len(active_pigeons) < self.pigeon_limit[player_id]:
+            source = self.player_castle_node if player_id == 0 else self.enemy_castle_node
+            command = {"type": command_type, "data": data}
+            if count is not None:
+                command["count"] = count
+            new_pigeon = Pigeon(player_id, source, target_node, command, units=[])
             self.pigeons.append(new_pigeon)
             return True
         return False
@@ -241,23 +254,48 @@ class GameState:
                         self.visible_nodes[p].add(neighbor)
 
     def execute_command(self, unit, command):
-        if command["type"] == "move":
+        if command["type"] == "move_attack":
             target_node = command["data"]
             if target_node in unit.node.neighbors:
-                # Blocking check: cannot move through or to enemy units
-                enemies = [u for u in self.get_units_at(target_node) if u.owner != unit.owner]
+                requested_count = command.get("count", unit.count)
+                move_count = min(requested_count, unit.count)
+                if move_count <= 0: return None
+
+                # Handle Split
+                if move_count < unit.count:
+                    # Create detachment
+                    moving_unit = Unit(unit.owner, unit.unit_type, unit.node, count=move_count)
+                    unit.count -= move_count
+                    self.units.append(moving_unit)
+                else:
+                    moving_unit = unit
+
+                enemies = [u for u in self.get_units_at(target_node) if u.owner != moving_unit.owner]
+                
                 if not enemies:
-                    unit.node = target_node
+                    # Empty tile - just move
+                    moving_unit.node = target_node
                     # Merge with existing friendly units at target
-                    friendlies = [u for u in self.get_units_at(target_node) if u.owner == unit.owner and u != unit]
+                    friendlies = [u for u in self.get_units_at(target_node) if u.owner == moving_unit.owner and u != moving_unit]
                     if friendlies:
-                        friendlies[0].count += unit.count
-                        if unit in self.units:
-                            self.units.remove(unit)
-        elif command["type"] == "attack":
-            target_node = command["data"]
-            if target_node in unit.node.neighbors:
-                self.resolve_combat(unit.node, target_node)
+                        friendlies[0].count += moving_unit.count
+                        if moving_unit in self.units:
+                            self.units.remove(moving_unit)
+                else:
+                    # Enemy present - attack (All units at source fight, but only survivors continue)
+                    self.resolve_combat(moving_unit.node, target_node)
+                    
+                    # Check if the moving detachment survived
+                    if moving_unit in self.units:
+                        remaining_enemies = [u for u in self.get_units_at(target_node) if u.owner != moving_unit.owner]
+                        if not remaining_enemies:
+                            # All enemies defeated - move in
+                            moving_unit.node = target_node
+                            friendlies = [u for u in self.get_units_at(target_node) if u.owner == moving_unit.owner and u != moving_unit]
+                            if friendlies:
+                                friendlies[0].count += moving_unit.count
+                                if moving_unit in self.units:
+                                    self.units.remove(moving_unit)
         elif command["type"] == "build":
             if unit.node.structure is None:
                 owner = unit.owner
@@ -270,8 +308,7 @@ class GameState:
         return None
 
     def end_turn(self):
-        # Clear previous report for the player whose turn has ended
-        self.latest_report[self.turn] = None
+        # We no longer clear reports every turn as they are now accumulated
         
         # Update pigeons
         for pigeon in self.pigeons[:]:
@@ -279,19 +316,34 @@ class GameState:
                 pigeon.update()
                 if pigeon.arrived:
                     if not pigeon.returning:
-                        # Pigeon arrived at unit, execute commands
-                        for unit in pigeon.units:
-                            if unit in self.units:
-                                result = self.execute_command(unit, pigeon.command)
-                                if result:
-                                    pigeon.payload = result
+                        # Pigeon arrived at target, execute commands
+                        units_to_command = pigeon.units if pigeon.units else self.get_units_at(pigeon.target_node)
+                        friendly_units = [u for u in units_to_command if u.owner == pigeon.owner]
+                        
+                        if friendly_units:
+                            for unit in friendly_units:
+                                if unit in self.units:
+                                    result = self.execute_command(unit, pigeon.command)
+                                    if result:
+                                        pigeon.payload = result
+                        else:
+                            # No units found at target node
+                            pigeon.payload = {
+                                'position': (pigeon.target_node.x, pigeon.target_node.y),
+                                'message': "No units found at destination to execute order",
+                                'count': 0,
+                                'friendly_adjacent': [],
+                                'enemy_adjacent': []
+                            }
+                        
                         pigeon.returning = True
                         pigeon.arrived = False
                         pigeon.turns_to_reach = 2 
                     else:
                         # Pigeon returned to castle, deliver report if any
                         if pigeon.payload:
-                            self.latest_report[pigeon.owner] = pigeon.payload
+                            pigeon.payload['turn_received'] = self.turn_count
+                            self.reports[pigeon.owner].append(pigeon.payload)
                         self.pigeons.remove(pigeon)
 
         # Resource Generation (Structures only)
