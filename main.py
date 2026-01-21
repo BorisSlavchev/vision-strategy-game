@@ -136,6 +136,7 @@ class Game:
         
         self.ui_state = UIState.MAIN_MENU
         self.selected_mode = "God"
+        self.automated_phases = True
         self.state = None # Initialized when game starts
         self.mode_options = ["God", "Fog", "Realistic"]
         self.context_menu = ContextMenu(self.font)
@@ -153,11 +154,12 @@ class Game:
             Button(SCREEN_WIDTH//2 - 100, 250, button_w, button_h, "Mode: God", self.font),
             Button(SCREEN_WIDTH//2 - 100, 310, button_w, button_h, "Mode: Fog", self.font),
             Button(SCREEN_WIDTH//2 - 100, 370, button_w, button_h, "Mode: Realistic", self.font),
+            Button(SCREEN_WIDTH//2 - 100, 430, button_w, button_h, "Phase: Auto", self.font),
             Button(SCREEN_WIDTH//2 - 100, 500, button_w, button_h, "Back", self.ui_font)
         ]
 
     def start_new_game(self):
-        self.state = GameState(mode=self.selected_mode)
+        self.state = GameState(mode=self.selected_mode, automated_phases=self.automated_phases)
         self.ui_state = UIState.PLAYING
 
     def update_unit_panel(self):
@@ -321,8 +323,13 @@ class Game:
         turn_count_text = f"Turn #: {self.state.turn_count}"
         self.screen.blit(self.font.render(turn_count_text, True, BLACK), (10, 110))
         
+        # Phase Display
+        phase_name = self.state.phases[self.state.current_phase_index]
+        phase_surf = self.font.render(f"Phase: {phase_name}", True, PURPLE)
+        self.screen.blit(phase_surf, (10, 140))
+        
         # Resources UI
-        res_y = 150
+        res_y = 180
         self.screen.blit(self.font.render("Resources:", True, BLACK), (10, res_y))
         res_y += 25
         res = self.state.resources[self.state.turn]
@@ -466,7 +473,7 @@ class Game:
         title_rect = title_surf.get_rect(center=(SCREEN_WIDTH//2, 100))
         self.screen.blit(title_surf, title_rect)
         
-        mode_info = f"Current Mode: {self.selected_mode}"
+        mode_info = f"Current Mode: {self.selected_mode} | Auto-Phase: {'ON' if self.automated_phases else 'OFF'}"
         info_surf = self.ui_font.render(mode_info, True, YELLOW)
         info_rect = info_surf.get_rect(center=(SCREEN_WIDTH//2, 180))
         self.screen.blit(info_surf, info_rect)
@@ -491,7 +498,10 @@ class Game:
                 if i == 0: self.selected_mode = "God"
                 elif i == 1: self.selected_mode = "Fog"
                 elif i == 2: self.selected_mode = "Realistic"
-                elif i == 3: self.ui_state = UIState.MAIN_MENU
+                elif i == 3: 
+                    self.automated_phases = not self.automated_phases
+                    self.settings_buttons[3].text = f"Phase: {'Auto' if self.automated_phases else 'Manual'}"
+                elif i == 4: self.ui_state = UIState.MAIN_MENU
 
     def run(self):
         running = True
@@ -514,6 +524,11 @@ class Game:
                         if event.type == pygame.MOUSEBUTTONDOWN:
                             if event.button == 1: # Left click
                                 if self.context_menu.visible:
+                                    # Restriction: Only allow context menu actions in "Give Orders" phase
+                                    if self.state.phases[self.state.current_phase_index] != "Give Orders":
+                                        self.context_menu.hide()
+                                        continue
+
                                     # Don't hide yet if we might transition to a sub-menu
                                     menu_result = self.context_menu.handle_click(event.pos, hide_automatically=False)
                                     if menu_result:
@@ -553,6 +568,10 @@ class Game:
                             elif event.button == 3: # Right click
                                 # Clip mouse interaction to map area
                                 if LEFT_PANEL_WIDTH < event.pos[0] < SCREEN_WIDTH - REPORT_PANEL_WIDTH:
+                                    # Restriction: Only allow right-click context menu in "Give Orders" phase
+                                    if self.state.phases[self.state.current_phase_index] != "Give Orders":
+                                        continue
+                                    
                                     node = self.get_node_at_mouse(event.pos)
                                     if node:
                                         options = []

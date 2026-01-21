@@ -10,6 +10,7 @@ class Pigeon:
         self.returning = False
         self.arrived = False
         self.payload = None # Data collected (e.g. report)
+        self.dispatched = False # Whether the pigeon has been sent out with a command
 
     def update(self):
         if self.turns_to_reach > 0:

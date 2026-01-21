@@ -12,8 +12,9 @@ class Unit:
         self.pending_command = None # Command sent via pigeon
 
 class GameState:
-    def __init__(self, mode="God"):
+    def __init__(self, mode="God", automated_phases=True):
         self.grid_size = 3
+        self.automated_phases = automated_phases
         self.nodes = create_grid(self.grid_size, self.grid_size)
         self.units = []
         self.turn = 0 # 0 for player, 1 for enemy
@@ -25,6 +26,19 @@ class GameState:
         self.pigeon_limit = [1, 1] 
         self.turn_count = 1
         self.reports = [[], []] # Stores list of reports for each player
+        
+        # Phase Management
+        self.phases = [
+            "Information (Reports)", 
+            "Give Orders", 
+            "Order Give/Receive", 
+            "Pigeon Actions", 
+            "Unit Actions", 
+            "End of Turn"
+        ]
+        self.current_phase_index = 0
+        self.process_reports_phase()
+        self.advance_phase()
         
         # Game modes: "God", "Fog", "Realistic"
         self.mode = mode
@@ -307,45 +321,103 @@ class GameState:
             return self.get_unit_report(unit)
         return None
 
-    def end_turn(self):
-        # We no longer clear reports every turn as they are now accumulated
+    def advance_phase(self):
+        """Advances the game to the next phase. Returns True if turn ended."""
+        self.current_phase_index += 1
         
-        # Update pigeons
-        for pigeon in self.pigeons[:]:
-            if pigeon.owner == self.turn:
-                pigeon.update()
-                if pigeon.arrived:
-                    if not pigeon.returning:
-                        # Pigeon arrived at target, execute commands
-                        units_to_command = pigeon.units if pigeon.units else self.get_units_at(pigeon.target_node)
-                        friendly_units = [u for u in units_to_command if u.owner == pigeon.owner]
-                        
-                        if friendly_units:
-                            for unit in friendly_units:
-                                if unit in self.units:
-                                    result = self.execute_command(unit, pigeon.command)
-                                    if result:
-                                        pigeon.payload = result
-                        else:
-                            # No units found at target node
-                            pigeon.payload = {
-                                'position': (pigeon.target_node.x, pigeon.target_node.y),
-                                'message': "No units found at destination to execute order",
-                                'count': 0,
-                                'friendly_adjacent': [],
-                                'enemy_adjacent': []
-                            }
-                        
-                        pigeon.returning = True
-                        pigeon.arrived = False
-                        pigeon.turns_to_reach = 2 
-                    else:
-                        # Pigeon returned to castle, deliver report if any
-                        if pigeon.payload:
-                            pigeon.payload['turn_received'] = self.turn_count
-                            self.reports[pigeon.owner].append(pigeon.payload)
-                        self.pigeons.remove(pigeon)
+        if self.current_phase_index >= len(self.phases):
+            self.current_phase_index = 0
+            # If we reached the end of the turn process, we switch players
+            # This is handled by process_end_of_turn
+            return True
+            
+        # Execute phase logic
+        phase = self.phases[self.current_phase_index]
+        
+        if phase == "Information (Reports)":
+            self.process_reports_phase()
+        elif phase == "Order Give/Receive":
+            self.process_order_give_receive_phase()
+        elif phase == "Pigeon Actions":
+            self.process_pigeon_actions_phase()
+        elif phase == "Unit Actions":
+            self.process_unit_actions_phase()
+        elif phase == "End of Turn":
+            self.process_end_of_turn()
+            
+        return False
 
+    def process_reports_phase(self):
+        """Phase 1: Process returning pigeons that have already arrived at the castle"""
+        for pigeon in self.pigeons[:]:
+            if pigeon.owner == self.turn and pigeon.returning:
+                if pigeon.arrived:
+                    if pigeon.payload:
+                        pigeon.payload['turn_received'] = self.turn_count
+                        self.reports[pigeon.owner].append(pigeon.payload)
+                    self.pigeons.remove(pigeon)
+
+    def process_order_give_receive_phase(self):
+        """Phase 3: Order Give/Receive - Dispatch new orders and units receive arrived ones"""
+        # 1. Receive Arrived Orders
+        for pigeon in self.pigeons:
+            if pigeon.owner == self.turn and not pigeon.returning and pigeon.arrived and getattr(pigeon, 'dispatched', False):
+                # Pigeon has arrived at unit from previous turn's travel, deliver now
+                units_to_command = pigeon.units if pigeon.units else self.get_units_at(pigeon.target_node)
+                friendly_units = [u for u in units_to_command if u.owner == pigeon.owner]
+                
+                if friendly_units:
+                    for unit in friendly_units:
+                        if unit in self.units:
+                            unit.pending_command = pigeon.command
+                else:
+                    # No units found at target node
+                    pigeon.payload = {
+                        'position': (pigeon.target_node.x, pigeon.target_node.y),
+                        'message': "No units found at destination to execute order",
+                        'count': 0,
+                        'friendly_adjacent': [],
+                        'enemy_adjacent': []
+                    }
+                
+                # Immediately prepare for return trip
+                pigeon.returning = True
+                pigeon.arrived = False
+                pigeon.turns_to_reach = 2 
+                pigeon.total_turns = 2
+        
+        # 2. Dispatch New Orders
+        for pigeon in self.pigeons:
+            if pigeon.owner == self.turn and not pigeon.returning and not getattr(pigeon, 'dispatched', False):
+                pigeon.dispatched = True
+
+    def process_pigeon_actions_phase(self):
+        """Phase 4: Update movement for all dispatched pigeons (outward or returning)"""
+        for pigeon in self.pigeons[:]:
+            if pigeon.owner == self.turn and getattr(pigeon, 'dispatched', False):
+                pigeon.update()
+                # If outward pigeon arrived, it will be processed in Turn N+1 Phase 3 (Receive)
+                # If returning pigeon arrived, it will be processed in Turn N+1 Phase 1 (Reports)
+
+    def process_unit_actions_phase(self):
+        """Phase 5: Units execute their pending commands"""
+        for unit in self.units:
+            if unit.owner == self.turn and unit.pending_command:
+                result = self.execute_command(unit, unit.pending_command)
+                # If command was a report, find the pigeon that delivered it to store the result
+                # Note: This is slightly simplified since we don't have a direct back-ref
+                # from unit to the specific pigeon that just arrived. 
+                # But in this system, pigeons return in the NEXT turn's report phase.
+                if result:
+                    # Find any pigeon that just arrived at this unit's node and is returning
+                    for pigeon in self.pigeons:
+                        if pigeon.owner == unit.owner and pigeon.returning and pigeon.target_node == unit.node:
+                            pigeon.payload = result
+                
+                unit.pending_command = None
+
+    def process_end_of_turn(self):
+        """Phase 6: Resource generation and turn transition"""
         # Resource Generation (Structures only)
         for node in self.nodes:
             if node.structure and node.structure_owner is not None:
@@ -354,7 +426,6 @@ class GameState:
                     if amount > 0:
                         harvest = 5 
                         self.resources[owner][res] += harvest
-            # No manual unit harvest anymore
 
         # Base income
         self.resources[0]["gold"] += 5
@@ -373,30 +444,37 @@ class GameState:
         
         self.update_visibility()
         
-        # Check win condition (Castle capture is the primary objective)
+        # Check win condition
         p1_at_enemy_castle = [u for u in self.get_units_at(self.enemy_castle_node) if u.owner == 0]
         p2_at_player_castle = [u for u in self.get_units_at(self.player_castle_node) if u.owner == 1]
         
         player_units = [u for u in self.units if u.owner == 0]
         enemy_units = [u for u in self.units if u.owner == 1]
         
-        # Player 0 wins
         if p1_at_enemy_castle:
-            print("Player 1 (Blue) Wins! Castle captured.")
             self.game_over = True
             self.winner = 0
-        # Player 1 wins
         elif p2_at_player_castle:
-            print("Player 2 (Red) Wins! Castle captured.")
             self.game_over = True
             self.winner = 1
-        # Wipe-out condition (only if no units AND no gold to recruit)
         elif not enemy_units and self.resources[1]["gold"] < 10 and self.turn_count > 10:
-            print("Player 1 (Blue) Wins! Enemy kingdom collapsed.")
             self.game_over = True
             self.winner = 0
         elif not player_units and self.resources[0]["gold"] < 10 and self.turn_count > 10:
-            print("Player 2 (Red) Wins! Player kingdom collapsed.")
             self.game_over = True
             self.winner = 1
+        
+        # Reset phase for next player (they start at phase 0: Information)
+        self.current_phase_index = 0
+        self.process_reports_phase() # Process reports immediately for the new current player
+
+    def end_turn(self):
+        """Advances through phases. If automated_phases is True, loops until 'Give Orders'."""
+        if self.automated_phases:
+            while True:
+                self.advance_phase()
+                if self.phases[self.current_phase_index] == "Give Orders":
+                    break
+        else:
+            self.advance_phase()
 
