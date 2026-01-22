@@ -1,5 +1,8 @@
+import math
+import os
 import random
-from .graph import create_grid
+from collections import deque
+from .graph import create_grid, create_map_from_json
 from .pigeon import Pigeon
 
 class Unit:
@@ -10,30 +13,51 @@ class Unit:
         self.count = count # Number of soldiers in this unit stack
         self.has_moved = False
         self.pending_command = None # Command sent via pigeon
+        
+        # Travel state for multi-turn movement
+        self.travel_target = None
+        self.travel_remaining = 0
+        self.travel_command = None # Store the command to execute on arrival (e.g. move_attack)
 
 class GameState:
-    def __init__(self, mode="God", automated_phases=True):
-        self.grid_size = 3
+    def __init__(self, mode="God", automated_phases=True, map_name="default_3x3"):
         self.automated_phases = automated_phases
-        self.nodes = create_grid(self.grid_size, self.grid_size)
+        self.map_name = map_name
+        
+        # Load map from JSON
+        maps_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), "maps")
+        map_path = os.path.join(maps_dir, f"{map_name}.json")
+        
+        if os.path.exists(map_path):
+            self.nodes, self.player_castle_node, self.enemy_castle_node = create_map_from_json(map_path)
+        else:
+            # Fallback to legacy grid
+            self.nodes = create_grid(3, 3)
+            self.player_castle_node = self.get_node(0, 0)
+            self.enemy_castle_node = self.get_node(2, 2)
+            self.player_castle_node.structure = "Castle"
+            self.player_castle_node.structure_owner = 0
+            self.enemy_castle_node.structure = "Castle"
+            self.enemy_castle_node.structure_owner = 1
+        
         self.units = []
-        self.turn = 0 # 0 for player, 1 for enemy
+        self.turn = 0  # 0 for player, 1 for enemy
         self.resources = [
             {"gold": 20, "food": 10, "stone": 10, "wood": 10},
             {"gold": 20, "food": 10, "stone": 10, "wood": 10}
         ]
         self.pigeons = []
-        self.pigeon_limit = [1, 1] 
+        self.pigeon_limit = [1, 1]
         self.turn_count = 1
-        self.reports = [[], []] # Stores list of reports for each player
+        self.reports = [[], []]  # Stores list of reports for each player
         
         # Phase Management
         self.phases = [
-            "Information (Reports)", 
-            "Give Orders", 
-            "Order Give/Receive", 
-            "Pigeon Actions", 
-            "Unit Actions", 
+            "Information (Reports)",
+            "Give Orders",
+            "Order Give/Receive",
+            "Pigeon Actions",
+            "Unit Actions",
             "End of Turn"
         ]
         self.current_phase_index = 0
@@ -42,18 +66,9 @@ class GameState:
         
         # Game modes: "God", "Fog", "Realistic"
         self.mode = mode
-        self.visible_nodes = [set(), set()] 
+        self.visible_nodes = [set(), set()]
         
-        # Setup Castles
-        self.player_castle_node = self.get_node(0, 0)
-        self.enemy_castle_node = self.get_node(2, 2)
-        
-        self.player_castle_node.structure = "Castle"
-        self.player_castle_node.structure_owner = 0
-        self.enemy_castle_node.structure = "Castle"
-        self.enemy_castle_node.structure_owner = 1
-        
-        # Distribute some resources on the map
+        # Distribute some resources on the map (only on nodes without structures)
         for node in self.nodes:
             if node.structure is None and random.random() < 0.4:
                 res_type = random.choice(["gold", "food", "stone", "wood"])
@@ -128,12 +143,36 @@ class GameState:
                         if extra_unit in self.units:
                             self.units.remove(extra_unit)
 
+    def calculate_travel_time(self, source, target):
+        """BFS to find shortest travel time between source and target."""
+        if source == target:
+            return 0
+        
+        visited = {source: 0}
+        queue = deque([(source, 0)])
+        
+        while queue:
+            node, time = queue.popleft()
+            for neighbor in node.neighbors:
+                travel = node.get_travel_time(neighbor)
+                new_time = time + travel
+                if neighbor == target:
+                    return new_time
+                if neighbor not in visited or visited[neighbor] > new_time:
+                    visited[neighbor] = new_time
+                    queue.append((neighbor, new_time))
+        
+        return 999  # Unreachable
+
     def send_pigeon(self, player_id, unit, command_type, data=None):
         active_pigeons = [p for p in self.pigeons if p.owner == player_id]
         if len(active_pigeons) < self.pigeon_limit[player_id]:
             source = self.player_castle_node if player_id == 0 else self.enemy_castle_node
-            # Target is the unit's current node (where the pigeon will find them)
+            unit_travel_time = self.calculate_travel_time(source, unit.node)
+            travel_time = math.ceil(unit_travel_time / 2)
             new_pigeon = Pigeon(player_id, source, unit.node, {"type": command_type, "data": data}, units=[unit])
+            new_pigeon.turns_to_reach = travel_time
+            new_pigeon.total_turns = travel_time
             self.pigeons.append(new_pigeon)
             return True
         return False
@@ -143,10 +182,14 @@ class GameState:
         active_pigeons = [p for p in self.pigeons if p.owner == player_id]
         if len(active_pigeons) < self.pigeon_limit[player_id]:
             source = self.player_castle_node if player_id == 0 else self.enemy_castle_node
+            unit_travel_time = self.calculate_travel_time(source, target_node)
+            travel_time = math.ceil(unit_travel_time / 2)
             command = {"type": command_type, "data": data}
             if count is not None:
                 command["count"] = count
             new_pigeon = Pigeon(player_id, source, target_node, command, units=[])
+            new_pigeon.turns_to_reach = travel_time
+            new_pigeon.total_turns = travel_time
             self.pigeons.append(new_pigeon)
             return True
         return False
@@ -284,32 +327,12 @@ class GameState:
                 else:
                     moving_unit = unit
 
-                enemies = [u for u in self.get_units_at(target_node) if u.owner != moving_unit.owner]
+                # Initiate multi-turn travel
+                travel_time = moving_unit.node.get_travel_time(target_node)
+                moving_unit.travel_target = target_node
+                moving_unit.travel_remaining = travel_time
+                moving_unit.travel_command = command
                 
-                if not enemies:
-                    # Empty tile - just move
-                    moving_unit.node = target_node
-                    # Merge with existing friendly units at target
-                    friendlies = [u for u in self.get_units_at(target_node) if u.owner == moving_unit.owner and u != moving_unit]
-                    if friendlies:
-                        friendlies[0].count += moving_unit.count
-                        if moving_unit in self.units:
-                            self.units.remove(moving_unit)
-                else:
-                    # Enemy present - attack (All units at source fight, but only survivors continue)
-                    self.resolve_combat(moving_unit.node, target_node)
-                    
-                    # Check if the moving detachment survived
-                    if moving_unit in self.units:
-                        remaining_enemies = [u for u in self.get_units_at(target_node) if u.owner != moving_unit.owner]
-                        if not remaining_enemies:
-                            # All enemies defeated - move in
-                            moving_unit.node = target_node
-                            friendlies = [u for u in self.get_units_at(target_node) if u.owner == moving_unit.owner and u != moving_unit]
-                            if friendlies:
-                                friendlies[0].count += moving_unit.count
-                                if moving_unit in self.units:
-                                    self.units.remove(moving_unit)
         elif command["type"] == "build":
             if unit.node.structure is None:
                 owner = unit.owner
@@ -320,6 +343,44 @@ class GameState:
         elif command["type"] == "report":
             return self.get_unit_report(unit)
         return None
+
+    def finalize_move_attack(self, moving_unit):
+        """Actually performs the move/attack logic once travel is finished"""
+        if moving_unit not in self.units:
+            return
+
+        target_node = moving_unit.travel_target
+        enemies = [u for u in self.get_units_at(target_node) if u.owner != moving_unit.owner]
+        
+        if not enemies:
+            # Empty tile - just move
+            moving_unit.node = target_node
+            # Merge with existing friendly units at target
+            friendlies = [u for u in self.get_units_at(target_node) if u.owner == moving_unit.owner and u != moving_unit]
+            if friendlies:
+                friendlies[0].count += moving_unit.count
+                if moving_unit in self.units:
+                    self.units.remove(moving_unit)
+        else:
+            # Enemy present - attack (All units at source fight, but only survivors continue)
+            self.resolve_combat(moving_unit.node, target_node)
+            
+            # Check if the moving detachment survived
+            if moving_unit in self.units:
+                remaining_enemies = [u for u in self.get_units_at(target_node) if u.owner != moving_unit.owner]
+                if not remaining_enemies:
+                    # All enemies defeated - move in
+                    moving_unit.node = target_node
+                    friendlies = [u for u in self.get_units_at(target_node) if u.owner == moving_unit.owner and u != moving_unit]
+                    if friendlies:
+                        friendlies[0].count += moving_unit.count
+                        if moving_unit in self.units:
+                            self.units.remove(moving_unit)
+        
+        # Clear travel state
+        moving_unit.travel_target = None
+        moving_unit.travel_remaining = 0
+        moving_unit.travel_command = None
 
     def advance_phase(self):
         """Advances the game to the next phase. Returns True if turn ended."""
@@ -380,11 +441,13 @@ class GameState:
                         'enemy_adjacent': []
                     }
                 
-                # Immediately prepare for return trip
+                # Immediately prepare for return trip using halved path travel time
+                unit_travel_back_time = self.calculate_travel_time(pigeon.target_node, pigeon.source_node)
+                travel_back_time = math.ceil(unit_travel_back_time / 2)
                 pigeon.returning = True
                 pigeon.arrived = False
-                pigeon.turns_to_reach = 2 
-                pigeon.total_turns = 2
+                pigeon.turns_to_reach = travel_back_time 
+                pigeon.total_turns = travel_back_time
         
         # 2. Dispatch New Orders
         for pigeon in self.pigeons:
@@ -393,21 +456,22 @@ class GameState:
 
     def process_pigeon_actions_phase(self):
         """Phase 4: Update movement for all dispatched pigeons (outward or returning)"""
+        print(f"DEBUG: Processing Pigeon Actions for Turn {self.turn}")
         for pigeon in self.pigeons[:]:
             if pigeon.owner == self.turn and getattr(pigeon, 'dispatched', False):
+                print(f"DEBUG: Pigeon {pigeon.owner} updating movement. Progress: {pigeon.get_progress():.2f}")
                 pigeon.update()
-                # If outward pigeon arrived, it will be processed in Turn N+1 Phase 3 (Receive)
-                # If returning pigeon arrived, it will be processed in Turn N+1 Phase 1 (Reports)
 
     def process_unit_actions_phase(self):
-        """Phase 5: Units execute their pending commands"""
+        """Phase 5: Units execute their pending commands and progress their travel"""
+        print(f"DEBUG: Processing Unit Actions for Turn {self.turn}")
+        
+        # 1. Start new actions for units with pending orders
         for unit in self.units:
             if unit.owner == self.turn and unit.pending_command:
+                print(f"DEBUG: Unit {unit.owner} starting command {unit.pending_command['type']}")
                 result = self.execute_command(unit, unit.pending_command)
                 # If command was a report, find the pigeon that delivered it to store the result
-                # Note: This is slightly simplified since we don't have a direct back-ref
-                # from unit to the specific pigeon that just arrived. 
-                # But in this system, pigeons return in the NEXT turn's report phase.
                 if result:
                     # Find any pigeon that just arrived at this unit's node and is returning
                     for pigeon in self.pigeons:
@@ -415,6 +479,18 @@ class GameState:
                             pigeon.payload = result
                 
                 unit.pending_command = None
+
+        # 2. Progress travel for all units belonging to the current player
+        # Use a list copy as finalize might remove units (merging or combat)
+        current_units = [u for u in self.units if u.owner == self.turn]
+        for unit in current_units:
+            if unit.travel_remaining > 0:
+                unit.travel_remaining -= 1
+                print(f"DEBUG: Unit {unit.owner} travel progress. Remaining: {unit.travel_remaining}")
+                if unit.travel_remaining == 0:
+                    print(f"DEBUG: Unit {unit.owner} arrived at target!")
+                    if unit.travel_command and unit.travel_command["type"] == "move_attack":
+                        self.finalize_move_attack(unit)
 
     def process_end_of_turn(self):
         """Phase 6: Resource generation and turn transition"""

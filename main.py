@@ -9,6 +9,7 @@ warnings.filterwarnings("ignore", message="Your system is avx2 capable")
 
 import pygame
 from game.engine import GameState
+from game.graph import get_available_maps
 
 # Constants
 SCREEN_WIDTH = 1100
@@ -137,9 +138,25 @@ class Game:
         self.ui_state = UIState.MAIN_MENU
         self.selected_mode = "God"
         self.automated_phases = True
-        self.state = None # Initialized when game starts
+        self.state = None  # Initialized when game starts
         self.mode_options = ["God", "Fog", "Realistic"]
         self.context_menu = ContextMenu(self.font)
+        
+        # Camera/Viewport panning
+        self.camera_x = 0
+        self.camera_y = 0
+        self.is_dragging = False
+        self.drag_start_x = 0
+        self.drag_start_y = 0
+        self.camera_start_x = 0
+        self.camera_start_y = 0
+        
+        # Map selection
+        self.maps_dir = os.path.join(os.path.dirname(__file__), "maps")
+        self.available_maps = get_available_maps(self.maps_dir)
+        self.selected_map_index = 0
+        if "default_3x3" in self.available_maps:
+            self.selected_map_index = self.available_maps.index("default_3x3")
         
         # UI Elements for Main Menu
         button_w, button_h = 200, 50
@@ -149,25 +166,38 @@ class Game:
             Button(SCREEN_WIDTH//2 - 100, 440, button_w, button_h, "Quit", self.ui_font)
         ]
         
-        # UI Elements for Settings
+        # UI Elements for Settings (will be rebuilt with map button)
+        self._rebuild_settings_buttons()
+
+    def _rebuild_settings_buttons(self):
+        """Rebuild settings buttons with current map name."""
+        button_w, button_h = 200, 50
+        map_name = self.available_maps[self.selected_map_index] if self.available_maps else "none"
         self.settings_buttons = [
-            Button(SCREEN_WIDTH//2 - 100, 250, button_w, button_h, "Mode: God", self.font),
-            Button(SCREEN_WIDTH//2 - 100, 310, button_w, button_h, "Mode: Fog", self.font),
-            Button(SCREEN_WIDTH//2 - 100, 370, button_w, button_h, "Mode: Realistic", self.font),
-            Button(SCREEN_WIDTH//2 - 100, 430, button_w, button_h, "Phase: Auto", self.font),
-            Button(SCREEN_WIDTH//2 - 100, 500, button_w, button_h, "Back", self.ui_font)
+            Button(SCREEN_WIDTH//2 - 100, 200, button_w, button_h, "Mode: God", self.font),
+            Button(SCREEN_WIDTH//2 - 100, 260, button_w, button_h, "Mode: Fog", self.font),
+            Button(SCREEN_WIDTH//2 - 100, 320, button_w, button_h, "Mode: Realistic", self.font),
+            Button(SCREEN_WIDTH//2 - 100, 380, button_w, button_h, "Phase: Auto", self.font),
+            Button(SCREEN_WIDTH//2 - 100, 440, button_w, button_h, f"Map: {map_name}", self.font),
+            Button(SCREEN_WIDTH//2 - 100, 520, button_w, button_h, "Back", self.ui_font)
         ]
 
     def start_new_game(self):
-        self.state = GameState(mode=self.selected_mode, automated_phases=self.automated_phases)
+        map_name = self.available_maps[self.selected_map_index] if self.available_maps else "default_3x3"
+        self.state = GameState(mode=self.selected_mode, automated_phases=self.automated_phases, map_name=map_name)
         self.ui_state = UIState.PLAYING
+        # Reset camera for new game
+        self.camera_x = 0
+        self.camera_y = 0
+        self.is_dragging = False
 
     def update_unit_panel(self):
-        pass # Method removed as per plan
+        pass  # Method removed as per plan
 
     def get_node_pos(self, node):
-        x = GRID_OFFSET_X + node.x * (CELL_SIZE + 20) + CELL_SIZE // 2
-        y = GRID_OFFSET_Y + node.y * (CELL_SIZE + 20) + CELL_SIZE // 2
+        """Get screen position for a node, accounting for camera offset."""
+        x = GRID_OFFSET_X + node.x * (CELL_SIZE + 20) + CELL_SIZE // 2 + self.camera_x
+        y = GRID_OFFSET_Y + node.y * (CELL_SIZE + 20) + CELL_SIZE // 2 + self.camera_y
         return x, y
 
     def get_node_at_mouse(self, pos):
@@ -247,17 +277,33 @@ class Game:
         
         player_visibility = self.state.visible_nodes[self.state.turn]
 
-        # Draw connections
+        # Draw connections with travel time labels
+        drawn_edges = set()  # Track drawn edges to avoid duplicates
         for node in self.state.nodes:
             if node not in player_visibility and self.state.mode != "God":
                 continue
             nx, ny = self.get_node_pos(node)
             for neighbor in node.neighbors:
-                if neighbor.id > node.id:
-                    if neighbor not in player_visibility and self.state.mode != "God":
-                        continue
-                    nnx, nny = self.get_node_pos(neighbor)
-                    pygame.draw.line(self.screen, BLACK, (nx, ny), (nnx, nny), 1)
+                # Create edge key to avoid drawing twice
+                edge_key = (min(node.id, neighbor.id), max(node.id, neighbor.id))
+                if edge_key in drawn_edges:
+                    continue
+                
+                if neighbor not in player_visibility and self.state.mode != "God":
+                    continue
+                
+                nnx, nny = self.get_node_pos(neighbor)
+                pygame.draw.line(self.screen, BLACK, (nx, ny), (nnx, nny), 1)
+                
+                # Draw travel time at midpoint of edge
+                travel_time = node.get_travel_time(neighbor)
+                mid_x = (nx + nnx) // 2
+                mid_y = (ny + nny) // 2
+                time_text = self.font.render(str(travel_time), True, PURPLE)
+                # Offset slightly to avoid overlapping the line
+                self.screen.blit(time_text, (mid_x - 5, mid_y - 10))
+                
+                drawn_edges.add(edge_key)
 
         # Draw nodes
         for node in self.state.nodes:
@@ -275,6 +321,11 @@ class Game:
             
             pygame.draw.circle(self.screen, color, (nx, ny), NODE_RADIUS)
             pygame.draw.circle(self.screen, BLACK, (nx, ny), NODE_RADIUS, 2)
+            
+            # Draw coordinate label above the tile
+            coord_text = self.font.render(f"({node.x}, {node.y})", True, BLACK)
+            coord_width = coord_text.get_width()
+            self.screen.blit(coord_text, (nx - coord_width // 2, ny - NODE_RADIUS - 20))
             
             # Draw structure icon
             if node.structure:
@@ -295,7 +346,21 @@ class Game:
             if unit.node not in player_visibility and self.state.mode != "God":
                 continue
                 
-            nx, ny = self.get_node_pos(unit.node)
+            # If unit is traveling, interpolate its position
+            if getattr(unit, 'travel_remaining', 0) > 0 and unit.travel_target:
+                start_pos = self.get_node_pos(unit.node)
+                end_pos = self.get_node_pos(unit.travel_target)
+                
+                # Get total travel time from the edge weight
+                total_travel = unit.node.get_travel_time(unit.travel_target)
+                # Calculate progress (0.0 at start, 1.0 at destination)
+                progress = 1.0 - (unit.travel_remaining / total_travel)
+                
+                nx = start_pos[0] + (end_pos[0] - start_pos[0]) * progress
+                ny = start_pos[1] + (end_pos[1] - start_pos[1]) * progress
+            else:
+                nx, ny = self.get_node_pos(unit.node)
+            
             color = BLUE if unit.owner == 0 else RED
             
             pygame.draw.circle(self.screen, color, (nx, ny), NODE_RADIUS - 10)
@@ -498,10 +563,15 @@ class Game:
                 if i == 0: self.selected_mode = "God"
                 elif i == 1: self.selected_mode = "Fog"
                 elif i == 2: self.selected_mode = "Realistic"
-                elif i == 3: 
+                elif i == 3:
                     self.automated_phases = not self.automated_phases
                     self.settings_buttons[3].text = f"Phase: {'Auto' if self.automated_phases else 'Manual'}"
-                elif i == 4: self.ui_state = UIState.MAIN_MENU
+                elif i == 4:
+                    # Cycle through available maps
+                    if self.available_maps:
+                        self.selected_map_index = (self.selected_map_index + 1) % len(self.available_maps)
+                        self._rebuild_settings_buttons()
+                elif i == 5: self.ui_state = UIState.MAIN_MENU
 
     def run(self):
         running = True
@@ -522,7 +592,10 @@ class Game:
                 elif self.ui_state == UIState.PLAYING:
                     if not self.state.game_over:
                         if event.type == pygame.MOUSEBUTTONDOWN:
-                            if event.button == 1: # Left click
+                            if event.button == 1:  # Left click
+                                # Check if in map area for potential drag start
+                                in_map_area = LEFT_PANEL_WIDTH < event.pos[0] < SCREEN_WIDTH - REPORT_PANEL_WIDTH
+                                
                                 if self.context_menu.visible:
                                     # Restriction: Only allow context menu actions in "Give Orders" phase
                                     if self.state.phases[self.state.current_phase_index] != "Give Orders":
@@ -561,8 +634,15 @@ class Game:
                                             self.state.send_pigeon_to_tile(self.state.turn, source_node, "move_attack", target_node, count=count)
                                         elif cmd == "build":
                                             self.state.send_pigeon_to_tile(self.state.turn, data, "build", None)
+                                elif in_map_area:
+                                    # Start drag for panning
+                                    self.is_dragging = True
+                                    self.drag_start_x = event.pos[0]
+                                    self.drag_start_y = event.pos[1]
+                                    self.camera_start_x = self.camera_x
+                                    self.camera_start_y = self.camera_y
                                 else:
-                                    # Regular click dismisses menu
+                                    # Regular click outside map area dismisses menu
                                     self.context_menu.hide()
 
                             elif event.button == 3: # Right click
@@ -609,6 +689,19 @@ class Game:
                             if event.key == pygame.K_SPACE:
                                 self.state.end_turn()
                                 self.context_menu.hide()
+                        
+                        # Handle mouse button release (stop dragging)
+                        if event.type == pygame.MOUSEBUTTONUP:
+                            if event.button == 1:
+                                self.is_dragging = False
+                        
+                        # Handle mouse motion (panning)
+                        if event.type == pygame.MOUSEMOTION:
+                            if self.is_dragging:
+                                dx = event.pos[0] - self.drag_start_x
+                                dy = event.pos[1] - self.drag_start_y
+                                self.camera_x = self.camera_start_x + dx
+                                self.camera_y = self.camera_start_y + dy
 
             self.draw()
             self.clock.tick(60)

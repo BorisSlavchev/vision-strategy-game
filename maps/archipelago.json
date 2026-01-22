@@ -1,0 +1,114 @@
+{
+    "name": "Archipelago",
+    "description": "Scattered islands with varying travel times simulating water crossings",
+    "nodes": [
+        {
+            "id": 0,
+            "x": 0,
+            "y": 0,
+            "structure": "Castle",
+            "structure_owner": 0
+        },
+        {
+            "id": 1,
+            "x": 2,
+            "y": 0
+        },
+        {
+            "id": 2,
+            "x": 4,
+            "y": 0
+        },
+        {
+            "id": 3,
+            "x": 1,
+            "y": 2
+        },
+        {
+            "id": 4,
+            "x": 3,
+            "y": 2
+        },
+        {
+            "id": 5,
+            "x": 0,
+            "y": 4
+        },
+        {
+            "id": 6,
+            "x": 2,
+            "y": 4
+        },
+        {
+            "id": 7,
+            "x": 4,
+            "y": 4,
+            "structure": "Castle",
+            "structure_owner": 1
+        }
+    ],
+    "edges": [
+        {
+            "from": 0,
+            "to": 1,
+            "travel_time": 2
+        },
+        {
+            "from": 0,
+            "to": 3,
+            "travel_time": 2
+        },
+        {
+            "from": 1,
+            "to": 2,
+            "travel_time": 2
+        },
+        {
+            "from": 1,
+            "to": 3,
+            "travel_time": 1
+        },
+        {
+            "from": 1,
+            "to": 4,
+            "travel_time": 1
+        },
+        {
+            "from": 2,
+            "to": 4,
+            "travel_time": 2
+        },
+        {
+            "from": 3,
+            "to": 5,
+            "travel_time": 2
+        },
+        {
+            "from": 3,
+            "to": 6,
+            "travel_time": 1
+        },
+        {
+            "from": 4,
+            "to": 6,
+            "travel_time": 1
+        },
+        {
+            "from": 4,
+            "to": 7,
+            "travel_time": 2
+        },
+        {
+            "from": 5,
+            "to": 6,
+            "travel_time": 2
+        },
+        {
+            "from": 6,
+            "to": 7,
+            "travel_time": 2
+        }
+    ],
+    "player_castle": 0,
+    "enemy_castle": 7
+}
