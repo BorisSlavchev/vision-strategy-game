@@ -12,15 +12,27 @@ from game.engine import GameState
 from game.graph import get_available_maps
 
 # Constants
-SCREEN_WIDTH = 1100
-SCREEN_HEIGHT = 800
+# Initial dimensions for windowed mode
+WINDOW_WIDTH = 1100
+WINDOW_HEIGHT = 800
+
+# Desktop dimensions will be stored here
+DESKTOP_WIDTH = 0
+DESKTOP_HEIGHT = 0
+
+# Screen dimensions will be set dynamically
+SCREEN_WIDTH = WINDOW_WIDTH
+SCREEN_HEIGHT = WINDOW_HEIGHT
+
 GRID_SIZE = 3
 CELL_SIZE = 80
-LEFT_PANEL_WIDTH = 250
+BOTTOM_PANEL_HEIGHT = 150
 REPORT_PANEL_WIDTH = 300
-MAP_WIDTH = SCREEN_WIDTH - LEFT_PANEL_WIDTH - REPORT_PANEL_WIDTH
-GRID_OFFSET_X = LEFT_PANEL_WIDTH + (MAP_WIDTH - (GRID_SIZE * (CELL_SIZE + 20))) // 2
-GRID_OFFSET_Y = 150
+MAP_WIDTH = SCREEN_WIDTH - REPORT_PANEL_WIDTH
+MAP_HEIGHT = SCREEN_HEIGHT - BOTTOM_PANEL_HEIGHT
+
+GRID_OFFSET_X = (MAP_WIDTH - (GRID_SIZE * (CELL_SIZE + 20))) // 2
+GRID_OFFSET_Y = (MAP_HEIGHT - (GRID_SIZE * (CELL_SIZE + 20))) // 2
 NODE_RADIUS = 30
 
 from enum import Enum
@@ -30,7 +42,7 @@ class UIState(Enum):
     PLAYING = 3
     GAMEOVER = 4
 
-from game.ui_components import Button
+from game.ui_components import Button, TextInput
 
 # Colors
 WHITE = (255, 255, 255)
@@ -54,29 +66,45 @@ class ContextMenu:
         self.target_node = None
         self.padding = 10
         self.option_height = 30
+        self.text_input = None
         
     def show(self, pos, options, target_node):
         self.visible = True
         self.pos = pos
         self.options = options
         self.target_node = target_node
+        self.text_input = None
+        
+        # Initialize text input if splitter is present
+        for opt in options:
+            if opt.get("is_splitter"):
+                input_w = 60
+                input_h = 24
+                # Position it will be set in draw
+                self.text_input = TextInput(0, 0, input_w, input_h, self.font)
+                self.text_input.set_text(str(opt.get("amount", 0)))
+                break
         
     def hide(self):
         self.visible = False
         self.options = []
         self.target_node = None
+        self.text_input = None
         
     def get_rect(self):
         if not self.options:
             return pygame.Rect(0, 0, 0, 0)
         
-        def get_label(opt):
+        def get_label_width(opt):
             label = opt["label"]
             if opt.get("is_splitter"):
-                label = f"{opt['label']} {opt.get('amount', 0)} (Scroll to adjust)"
-            return label
+                prefix_w = self.font.size(label)[0]
+                input_w = 60 # Default text input width
+                suffix_w = self.font.size(" (Scroll to adjust)")[0]
+                return prefix_w + input_w + suffix_w + 20
+            return self.font.size(label)[0]
 
-        width = max(self.font.size(get_label(opt))[0] for opt in self.options) + self.padding * 2
+        width = max(get_label_width(opt) for opt in self.options) + self.padding * 2
         height = len(self.options) * self.option_height
         return pygame.Rect(self.pos[0], self.pos[1], width, height)
     
@@ -88,38 +116,76 @@ class ContextMenu:
         pygame.draw.rect(screen, WHITE, rect)
         pygame.draw.rect(screen, BLACK, rect, 2)
         
+        # Clamp menu position to screen
+        if self.pos[0] + rect.width > SCREEN_WIDTH:
+            rect.x = SCREEN_WIDTH - rect.width
+        if self.pos[1] + rect.height > SCREEN_HEIGHT:
+            rect.y = SCREEN_HEIGHT - rect.height
+
+        curr_y = rect.y
         for i, opt in enumerate(self.options):
-            y = self.pos[1] + i * self.option_height
-            opt_rect = pygame.Rect(self.pos[0], y, rect.width, self.option_height)
+            opt_rect = pygame.Rect(rect.x, curr_y, rect.width, self.option_height)
             
-            # Highlight on hover
-            if opt_rect.collidepoint(pygame.mouse.get_pos()):
-                pygame.draw.rect(screen, GRAY, opt_rect)
+            # Highlight on hover (unless text input is being used)
+            if not (self.text_input and self.text_input.rect.collidepoint(pygame.mouse.get_pos())):
+                if opt_rect.collidepoint(pygame.mouse.get_pos()):
+                    pygame.draw.rect(screen, GRAY, opt_rect)
             
-            label = opt["label"]
             if opt.get("is_splitter"):
-                label = f"{opt['label']} {opt.get('amount', 0)} (Scroll to adjust)"
+                label = opt["label"]
+                # Render prefix
+                prefix_surf = self.font.render(label, True, BLACK)
+                screen.blit(prefix_surf, (rect.x + self.padding, curr_y + 5))
+                prefix_w = prefix_surf.get_width()
+                
+                # Position and draw text input
+                if self.text_input:
+                    self.text_input.rect.x = rect.x + self.padding + prefix_w + 5
+                    self.text_input.rect.y = curr_y + 3
+                    self.text_input.draw(screen)
+                    input_w = self.text_input.rect.width
+                else:
+                    input_w = 0
+                
+                # Render suffix
+                suffix_surf = self.font.render(" (Scroll to adjust)", True, BLACK)
+                screen.blit(suffix_surf, (rect.x + self.padding + prefix_w + input_w + 10, curr_y + 5))
+            else:
+                label = opt["label"]
+                text_surf = self.font.render(label, True, BLACK)
+                screen.blit(text_surf, (rect.x + self.padding, curr_y + 5))
             
-            text_surf = self.font.render(label, True, BLACK)
-            screen.blit(text_surf, (self.pos[0] + self.padding, y + 5))
+            curr_y += self.option_height
             
     def handle_click(self, pos, hide_automatically=True):
         if not self.visible:
             return None
         
+        if self.text_input and self.text_input.rect.collidepoint(pos):
+            self.text_input.active = True
+            return None # Don't trigger a click on options if clicking input
+        
         rect = self.get_rect()
+        # Account for possible clamping in draw
+        if self.pos[0] + rect.width > SCREEN_WIDTH: rect.x = SCREEN_WIDTH - rect.width
+        if self.pos[1] + rect.height > SCREEN_HEIGHT: rect.y = SCREEN_HEIGHT - rect.height
+
         if not rect.collidepoint(pos):
             self.hide()
             return None
         
+        curr_y = rect.y
         for i, opt in enumerate(self.options):
-            y = self.pos[1] + i * self.option_height
-            opt_rect = pygame.Rect(self.pos[0], y, rect.width, self.option_height)
+            opt_rect = pygame.Rect(rect.x, curr_y, rect.width, self.option_height)
             if opt_rect.collidepoint(pos):
                 result = opt
                 if hide_automatically:
                     self.hide()
                 return result
+            
+            curr_y += self.option_height
+            if opt.get("is_splitter") and self.text_input:
+                pass # Already handled in option loop
         
         self.hide()
         return None
@@ -128,7 +194,27 @@ class ContextMenu:
 class Game:
     def __init__(self):
         pygame.init()
+        
+        # Get desktop resolution and store it
+        info = pygame.display.Info()
+        global DESKTOP_WIDTH, DESKTOP_HEIGHT, SCREEN_WIDTH, SCREEN_HEIGHT, MAP_WIDTH, MAP_HEIGHT, GRID_OFFSET_X, GRID_OFFSET_Y
+        DESKTOP_WIDTH = info.current_w
+        DESKTOP_HEIGHT = info.current_h
+        
+        # Use a window sized slightly smaller than desktop to account for taskbars/titlebars
+        # This ensures the bottom isn't cut off and window buttons are visible
+        SCREEN_WIDTH = DESKTOP_WIDTH
+        SCREEN_HEIGHT = DESKTOP_HEIGHT - 80 
+        
+        # Re-calculate constants that depend on screen size
+        MAP_WIDTH = SCREEN_WIDTH - REPORT_PANEL_WIDTH
+        MAP_HEIGHT = SCREEN_HEIGHT - BOTTOM_PANEL_HEIGHT
+        GRID_OFFSET_X = (MAP_WIDTH - (GRID_SIZE * (CELL_SIZE + 20))) // 2
+        GRID_OFFSET_Y = (MAP_HEIGHT - (GRID_SIZE * (CELL_SIZE + 20))) // 2
+
         self.screen = pygame.display.set_mode((SCREEN_WIDTH, SCREEN_HEIGHT))
+        self.fullscreen = True
+        
         pygame.display.set_caption("Don't Shoot the Messenger - Strategy Game")
         self.clock = pygame.time.Clock()
         self.font = pygame.font.SysFont("Arial", 18)
@@ -170,16 +256,18 @@ class Game:
         self._rebuild_settings_buttons()
 
     def _rebuild_settings_buttons(self):
-        """Rebuild settings buttons with current map name."""
+        """Rebuild settings buttons with current map name and fullscreen state."""
         button_w, button_h = 200, 50
         map_name = self.available_maps[self.selected_map_index] if self.available_maps else "none"
+        fs_text = "Fullscreen: ON" if self.fullscreen else "Fullscreen: OFF"
         self.settings_buttons = [
             Button(SCREEN_WIDTH//2 - 100, 200, button_w, button_h, "Mode: God", self.font),
             Button(SCREEN_WIDTH//2 - 100, 260, button_w, button_h, "Mode: Fog", self.font),
             Button(SCREEN_WIDTH//2 - 100, 320, button_w, button_h, "Mode: Realistic", self.font),
             Button(SCREEN_WIDTH//2 - 100, 380, button_w, button_h, "Phase: Auto", self.font),
             Button(SCREEN_WIDTH//2 - 100, 440, button_w, button_h, f"Map: {map_name}", self.font),
-            Button(SCREEN_WIDTH//2 - 100, 520, button_w, button_h, "Back", self.ui_font)
+            Button(SCREEN_WIDTH//2 - 100, 500, button_w, button_h, fs_text, self.font),
+            Button(SCREEN_WIDTH//2 - 100, 580, button_w, button_h, "Back", self.ui_font)
         ]
 
     def start_new_game(self):
@@ -336,57 +424,58 @@ class Game:
         # Draw pigeons
         self.draw_pigeons()
 
-        # Draw UI Sidebar (Left)
-        pygame.draw.rect(self.screen, GRAY, (0, 0, LEFT_PANEL_WIDTH, SCREEN_HEIGHT))
-        pygame.draw.line(self.screen, BLACK, (LEFT_PANEL_WIDTH, 0), (LEFT_PANEL_WIDTH, SCREEN_HEIGHT), 2)
+        # Draw UI Sidebar (Bottom Panel)
+        panel_y = SCREEN_HEIGHT - BOTTOM_PANEL_HEIGHT
+        panel_w = SCREEN_WIDTH - REPORT_PANEL_WIDTH
+        pygame.draw.rect(self.screen, GRAY, (0, panel_y, panel_w, BOTTOM_PANEL_HEIGHT))
+        pygame.draw.line(self.screen, BLACK, (0, panel_y), (panel_w, panel_y), 2)
         
-        title_surf = pygame.font.SysFont("Arial", 22, bold=True).render("Kingdom Info", True, BLACK)
-        self.screen.blit(title_surf, (10, 10))
+        # Section 1: Kingdom Info (Left)
+        info_x = 20
+        curr_y = panel_y + 15
+        title_surf = pygame.font.SysFont("Arial", 20, bold=True).render("Kingdom Info", True, BLACK)
+        self.screen.blit(title_surf, (info_x, curr_y))
         
         mode_text = f"Mode: {self.state.mode}"
-        self.screen.blit(self.font.render(mode_text, True, BLACK), (10, 50))
+        self.screen.blit(self.font.render(mode_text, True, BLACK), (info_x, curr_y + 30))
         
         turn_text = f"Turn: {'Player (Blue)' if self.state.turn == 0 else 'Enemy (Red)'}"
-        self.screen.blit(self.font.render(turn_text, True, BLUE if self.state.turn == 0 else RED), (10, 80))
+        self.screen.blit(self.font.render(turn_text, True, BLUE if self.state.turn == 0 else RED), (info_x, curr_y + 55))
         
         turn_count_text = f"Turn #: {self.state.turn_count}"
-        self.screen.blit(self.font.render(turn_count_text, True, BLACK), (10, 110))
+        self.screen.blit(self.font.render(turn_count_text, True, BLACK), (info_x, curr_y + 80))
         
-        # Phase Display
         phase_name = self.state.phases[self.state.current_phase_index]
         phase_surf = self.font.render(f"Phase: {phase_name}", True, PURPLE)
-        self.screen.blit(phase_surf, (10, 140))
+        self.screen.blit(phase_surf, (info_x, curr_y + 105))
         
-        # Resources UI
-        res_y = 180
-        self.screen.blit(self.font.render("Resources:", True, BLACK), (10, res_y))
-        res_y += 25
+        # Section 2: Resources & Pigeons (Center)
+        center_x = panel_w // 3
+        curr_y = panel_y + 15
+        self.screen.blit(self.font.render("Resources:", True, BLACK), (center_x, curr_y))
         gold = self.state.gold[self.state.turn]
-        self.screen.blit(self.font.render(f"Gold: {gold}", True, BLACK), (20, res_y))
-        res_y += 20
+        self.screen.blit(self.font.render(f"Gold: {gold}", True, BLACK), (center_x + 10, curr_y + 25))
             
-        # Pigeons UI
-        pigeon_y = 300
+        pigeon_x = center_x + 150
         active_pigeons = [p for p in self.state.pigeons if p.owner == self.state.turn]
-        self.screen.blit(self.font.render(f"Pigeons: {len(active_pigeons)}/{self.state.pigeon_limit[self.state.turn]}", True, BLACK), (10, pigeon_y))
-        pigeon_y += 25
-        for i, p in enumerate(active_pigeons):
-            status = "Returning" if p.returning else f"Traveling ({p.turns_to_reach} turns)"
+        self.screen.blit(self.font.render(f"Pigeons: {len(active_pigeons)}/{self.state.pigeon_limit[self.state.turn]}", True, BLACK), (pigeon_x, curr_y))
+        
+        for i, p in enumerate(active_pigeons[:4]): # Show up to 4 pigeons in bottom bar
+            status = "Returning" if p.returning else f"Traveling ({p.turns_to_reach}t)"
             p_info = f"P{i+1}: {p.command['type']} -> {status}"
-            self.screen.blit(self.font.render(p_info, True, DARK_GRAY), (20, pigeon_y))
-            pigeon_y += 20
+            self.screen.blit(self.font.render(p_info, True, DARK_GRAY), (pigeon_x + 10, curr_y + 25 + i * 20))
             
-        # Controls Hint
-        ctrl_y = 500
+        # Section 3: Quick Controls (Right)
+        ctrl_x = (panel_w * 2) // 3
+        curr_y = panel_y + 15
         controls = [
             "R-Click Tile: Issue Order",
             "SPACE: End Turn",
             "ESC: Main Menu"
         ]
-        self.screen.blit(self.font.render("Quick Controls:", True, BLACK), (10, ctrl_y))
-        for ctrl in controls:
-            ctrl_y += 20
-            self.screen.blit(self.font.render(ctrl, True, BLACK), (10, ctrl_y))
+        self.screen.blit(self.font.render("Quick Controls:", True, BLACK), (ctrl_x, curr_y))
+        for i, ctrl in enumerate(controls):
+            self.screen.blit(self.font.render(ctrl, True, BLACK), (ctrl_x + 10, curr_y + 25 + i * 20))
 
         # Draw Report Panel (Right)
         pygame.draw.rect(self.screen, GRAY, (SCREEN_WIDTH - REPORT_PANEL_WIDTH, 0, REPORT_PANEL_WIDTH, SCREEN_HEIGHT))
@@ -548,7 +637,40 @@ class Game:
                     if self.available_maps:
                         self.selected_map_index = (self.selected_map_index + 1) % len(self.available_maps)
                         self._rebuild_settings_buttons()
-                elif i == 5: self.ui_state = UIState.MAIN_MENU
+                elif i == 5:
+                    self.toggle_fullscreen()
+                elif i == 6: self.ui_state = UIState.MAIN_MENU
+
+    def toggle_fullscreen(self):
+        self.fullscreen = not self.fullscreen
+        global SCREEN_WIDTH, SCREEN_HEIGHT, MAP_WIDTH, MAP_HEIGHT, GRID_OFFSET_X, GRID_OFFSET_Y
+        
+        if self.fullscreen:
+            SCREEN_WIDTH = DESKTOP_WIDTH
+            SCREEN_HEIGHT = DESKTOP_HEIGHT - 80
+            # Removed NOFRAME to show window decorations (minimize/close buttons)
+            self.screen = pygame.display.set_mode((SCREEN_WIDTH, SCREEN_HEIGHT))
+        else:
+            SCREEN_WIDTH = WINDOW_WIDTH
+            SCREEN_HEIGHT = WINDOW_HEIGHT
+            if 'SDL_VIDEO_WINDOW_POS' in os.environ:
+                del os.environ['SDL_VIDEO_WINDOW_POS']
+            self.screen = pygame.display.set_mode((SCREEN_WIDTH, SCREEN_HEIGHT))
+            
+        # Re-calculate constants for both modes
+        MAP_WIDTH = SCREEN_WIDTH - REPORT_PANEL_WIDTH
+        MAP_HEIGHT = SCREEN_HEIGHT - BOTTOM_PANEL_HEIGHT
+        GRID_OFFSET_X = (MAP_WIDTH - (GRID_SIZE * (CELL_SIZE + 20))) // 2
+        GRID_OFFSET_Y = (MAP_HEIGHT - (GRID_SIZE * (CELL_SIZE + 20))) // 2
+        
+        # Rebuild UI elements for new dimensions
+        button_w, button_h = 200, 50
+        self.menu_buttons = [
+            Button(SCREEN_WIDTH//2 - 100, 300, button_w, button_h, "Start Game", self.ui_font),
+            Button(SCREEN_WIDTH//2 - 100, 370, button_w, button_h, "Settings", self.ui_font),
+            Button(SCREEN_WIDTH//2 - 100, 440, button_w, button_h, "Quit", self.ui_font)
+        ]
+        self._rebuild_settings_buttons()
 
     def run(self):
         running = True
@@ -566,12 +688,30 @@ class Game:
                     self.handle_menu_events(event)
                 elif self.ui_state == UIState.SETTINGS:
                     self.handle_settings_events(event)
-                elif self.ui_state == UIState.PLAYING:
+                if self.ui_state == UIState.PLAYING:
                     if not self.state.game_over:
+                        # Handle text input events if context menu is visible
+                        if self.context_menu.visible and self.context_menu.text_input:
+                            if self.context_menu.text_input.handle_event(event):
+                                # Enter was pressed in text input
+                                for opt in self.context_menu.options:
+                                    if opt.get("is_splitter"):
+                                        val = self.context_menu.text_input.get_value()
+                                        if val is not None:
+                                            opt["amount"] = val
+                                            # Trigger the move action
+                                            cmd = opt["command"]
+                                            data = opt["data"]
+                                            self.state.send_pigeon_to_tile(self.state.turn, data[0], cmd, data[1], count=val)
+                                            self.context_menu.hide()
+                                            break
+                            # If text input handled it, we might still want to process other events,
+                            # but let's be careful about double processing.
+                        
                         if event.type == pygame.MOUSEBUTTONDOWN:
                             if event.button == 1:  # Left click
                                 # Check if in map area for potential drag start
-                                in_map_area = LEFT_PANEL_WIDTH < event.pos[0] < SCREEN_WIDTH - REPORT_PANEL_WIDTH
+                                in_map_area = event.pos[0] < SCREEN_WIDTH - REPORT_PANEL_WIDTH and event.pos[1] < SCREEN_HEIGHT - BOTTOM_PANEL_HEIGHT
                                 
                                 if self.context_menu.visible:
                                     # Restriction: Only allow context menu actions in "Give Orders" phase
@@ -579,17 +719,16 @@ class Game:
                                         self.context_menu.hide()
                                         continue
 
-                                    # Don't hide yet if we might transition to a sub-menu
+                                    # Don't hide yet if we might transition to a sub-menu or interact with text input
                                     menu_result = self.context_menu.handle_click(event.pos, hide_automatically=False)
                                     if menu_result:
                                         if menu_result.get("prepare_split"):
                                             source_node, target_node = menu_result["data"]
-                                            self.context_menu.options = [
+                                            self.context_menu.show(event.pos, [
                                                 {"label": f"Move All -> {target_node.name}", "command": "move_attack", "data": (source_node, target_node)},
                                                 {"label": "Split & Move:", "command": "move_attack", "data": (source_node, target_node), "is_splitter": True, "amount": 10},
                                                 {"label": "Cancel", "command": "hide"}
-                                            ]
-                                            # Keep menu visible for sub-options
+                                            ], target_node)
                                             continue
                                         
                                         # If it wasn't a transition, hide it now
@@ -622,7 +761,7 @@ class Game:
 
                             elif event.button == 3: # Right click
                                 # Clip mouse interaction to map area
-                                if LEFT_PANEL_WIDTH < event.pos[0] < SCREEN_WIDTH - REPORT_PANEL_WIDTH:
+                                if event.pos[0] < SCREEN_WIDTH - REPORT_PANEL_WIDTH and event.pos[1] < SCREEN_HEIGHT - BOTTOM_PANEL_HEIGHT:
                                     # Restriction: Only allow right-click context menu in "Give Orders" phase
                                     if self.state.phases[self.state.current_phase_index] != "Give Orders":
                                         continue
@@ -657,6 +796,8 @@ class Game:
                                     for opt in self.context_menu.options:
                                         if opt.get("is_splitter"):
                                             opt["amount"] = max(1, opt["amount"] + change)
+                                            if self.context_menu.text_input:
+                                                self.context_menu.text_input.set_text(str(opt["amount"]))
 
                         if event.type == pygame.KEYDOWN:
                             if event.key == pygame.K_SPACE:

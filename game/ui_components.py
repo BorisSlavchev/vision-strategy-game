@@ -175,3 +175,73 @@ class ScrollPanel:
             if item.handle_event(event):
                 return item
         return None
+
+class TextInput:
+    def __init__(self, x, y, width, height, font, text="", placeholder=""):
+        self.rect = pygame.Rect(x, y, width, height)
+        self.font = font
+        self.text = text
+        self.placeholder = placeholder
+        self.active = False
+        self.cursor_visible = True
+        self.cursor_timer = 0
+        
+    def draw(self, screen):
+        # Draw background
+        bg_color = (255, 255, 255) if self.active else (230, 230, 230)
+        pygame.draw.rect(screen, bg_color, self.rect)
+        pygame.draw.rect(screen, BLACK if self.active else DARK_GRAY, self.rect, 2)
+        
+        # Draw text or placeholder
+        if not self.text and not self.active:
+            text_surf = self.font.render(self.placeholder, True, DARK_GRAY)
+        else:
+            text_surf = self.font.render(self.text, True, BLACK)
+            
+        screen.blit(text_surf, (self.rect.x + 5, self.rect.y + 5))
+        
+        # Draw cursor
+        if self.active:
+            self.cursor_timer += 1
+            if self.cursor_timer >= 30:
+                self.cursor_visible = not self.cursor_visible
+                self.cursor_timer = 0
+            
+            if self.cursor_visible:
+                text_width = self.font.size(self.text)[0]
+                pygame.draw.line(screen, BLACK, 
+                                 (self.rect.x + 5 + text_width, self.rect.y + 5),
+                                 (self.rect.x + 5 + text_width, self.rect.y + self.rect.height - 10), 2)
+                                 
+    def handle_event(self, event):
+        if event.type == pygame.MOUSEBUTTONDOWN:
+            if self.rect.collidepoint(event.pos):
+                self.active = True
+                self.cursor_visible = True
+                self.cursor_timer = 0
+            else:
+                self.active = False
+        
+        if self.active and event.type == pygame.KEYDOWN:
+            if event.key == pygame.K_BACKSPACE:
+                self.text = self.text[:-1]
+            elif event.key == pygame.K_RETURN:
+                self.active = False
+                return True # Signal Enter pressed
+            else:
+                # Only accept numeric input for unit splitting
+                if event.unicode.isdigit():
+                    self.text += event.unicode
+        return False
+    
+    def get_value(self):
+        try:
+            return int(self.text) if self.text else None
+        except ValueError:
+            return None
+            
+    def set_text(self, text):
+        self.text = str(text)
+    
+    def clear(self):
+        self.text = ""
