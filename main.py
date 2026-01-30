@@ -15,13 +15,13 @@ from game.graph import get_available_maps
 SCREEN_WIDTH = 1100
 SCREEN_HEIGHT = 800
 GRID_SIZE = 3
-CELL_SIZE = 120
+CELL_SIZE = 80
 LEFT_PANEL_WIDTH = 250
 REPORT_PANEL_WIDTH = 300
 MAP_WIDTH = SCREEN_WIDTH - LEFT_PANEL_WIDTH - REPORT_PANEL_WIDTH
 GRID_OFFSET_X = LEFT_PANEL_WIDTH + (MAP_WIDTH - (GRID_SIZE * (CELL_SIZE + 20))) // 2
-GRID_OFFSET_Y = 200
-NODE_RADIUS = 50
+GRID_OFFSET_Y = 150
+NODE_RADIUS = 30
 
 from enum import Enum
 class UIState(Enum):
@@ -211,36 +211,9 @@ class Game:
 
     def draw_pigeons(self):
         """Draw pigeons as small triangles traveling between nodes"""
-        player_visibility = self.state.visible_nodes[self.state.turn]
-            
+        return # Pigeons are now invisible in all modes
+
         for pigeon in self.state.pigeons:
-            # God sees all
-            if self.state.mode == "God":
-                is_visible = True
-            else:
-                # Baseline: Owner sees their own pigeon unless it's Realistic mode in the dark
-                is_visible = pigeon.owner == self.state.turn
-                
-                # Force visibility if near a visible node for either player (standard Fog) or Realistic
-                p = pigeon.get_progress()
-                dist_to_source = p if not pigeon.returning else 1.0 - p
-                dist_to_target = 1.0 - p if not pigeon.returning else p
-                
-                near_visible = False
-                if dist_to_source < 0.25 and pigeon.source_node in player_visibility:
-                    near_visible = True
-                if dist_to_target < 0.25 and pigeon.target_node in player_visibility:
-                    near_visible = True
-                
-                if self.state.mode == "Realistic":
-                    # In Realistic, hide pigeons entirely if not in vision range, even for owner
-                    is_visible = near_visible
-                else:
-                    # In Fog/God, either ownership or proximity grants visibility
-                    if near_visible: is_visible = True
-            
-            if not is_visible:
-                continue
 
             progress = pigeon.get_progress()
             
@@ -275,21 +248,20 @@ class Game:
     def draw_gameplay(self):
         self.screen.fill(WHITE)
         
-        player_visibility = self.state.visible_nodes[self.state.turn]
+        # Override visibility for game-over reveal
+        if self.state.game_over:
+            player_visibility = set(self.state.nodes)  # All nodes visible
+        else:
+            player_visibility = self.state.visible_nodes[self.state.turn]
 
-        # Draw connections with travel time labels
+        # Draw connections with travel time labels (Always Visible)
         drawn_edges = set()  # Track drawn edges to avoid duplicates
         for node in self.state.nodes:
-            if node not in player_visibility and self.state.mode != "God":
-                continue
             nx, ny = self.get_node_pos(node)
             for neighbor in node.neighbors:
                 # Create edge key to avoid drawing twice
                 edge_key = (min(node.id, neighbor.id), max(node.id, neighbor.id))
                 if edge_key in drawn_edges:
-                    continue
-                
-                if neighbor not in player_visibility and self.state.mode != "God":
                     continue
                 
                 nnx, nny = self.get_node_pos(neighbor)
@@ -309,6 +281,11 @@ class Game:
         for node in self.state.nodes:
             nx, ny = self.get_node_pos(node)
             
+            # Draw node name above the tile (Always Visible)
+            name_text = self.font.render(node.name, True, BLACK)
+            name_width = name_text.get_width()
+            self.screen.blit(name_text, (nx - name_width // 2, ny - NODE_RADIUS - 20))
+
             if node not in player_visibility and self.state.mode != "God":
                 pygame.draw.circle(self.screen, FOG, (nx, ny), NODE_RADIUS)
                 continue
@@ -322,28 +299,14 @@ class Game:
             pygame.draw.circle(self.screen, color, (nx, ny), NODE_RADIUS)
             pygame.draw.circle(self.screen, BLACK, (nx, ny), NODE_RADIUS, 2)
             
-            # Draw coordinate label above the tile
-            coord_text = self.font.render(f"({node.x}, {node.y})", True, BLACK)
-            coord_width = coord_text.get_width()
-            self.screen.blit(coord_text, (nx - coord_width // 2, ny - NODE_RADIUS - 20))
-            
             # Draw structure icon
             if node.structure:
                 s_text = self.font.render(node.structure[0], True, BLACK)
-                self.screen.blit(s_text, (nx - 5, ny - 25))
-
-            # Draw resources
-            res_str = ""
-            for r, amt in node.resources.items():
-                if amt > 0:
-                    res_str += f"{r[0].upper()}:{amt} "
-            if res_str:
-                res_surf = self.font.render(res_str.strip(), True, DARK_GRAY)
-                self.screen.blit(res_surf, (nx - 20, ny + 35))
+                self.screen.blit(s_text, (nx - 5, ny - 15))
 
         # Draw units
         for unit in self.state.units:
-            if unit.node not in player_visibility and self.state.mode != "God":
+            if unit.node not in player_visibility and self.state.mode != "God" and not self.state.game_over:
                 continue
                 
             # If unit is traveling, interpolate its position
@@ -365,9 +328,10 @@ class Game:
             
             pygame.draw.circle(self.screen, color, (nx, ny), NODE_RADIUS - 10)
             
-            # Show unit count
-            count_text = self.font.render(str(unit.count), True, WHITE)
-            self.screen.blit(count_text, (nx - 10, ny - 10))
+            # Show unit count in God mode, game over, or if at a Castle
+            if self.state.mode == "God" or self.state.game_over or unit.node.structure == "Castle":
+                count_text = self.font.render(str(unit.count), True, WHITE)
+                self.screen.blit(count_text, (nx - 10, ny - 10))
 
         # Draw pigeons
         self.draw_pigeons()
@@ -397,10 +361,9 @@ class Game:
         res_y = 180
         self.screen.blit(self.font.render("Resources:", True, BLACK), (10, res_y))
         res_y += 25
-        res = self.state.resources[self.state.turn]
-        for r_name, r_amt in res.items():
-            self.screen.blit(self.font.render(f"{r_name.capitalize()}: {r_amt}", True, BLACK), (20, res_y))
-            res_y += 20
+        gold = self.state.gold[self.state.turn]
+        self.screen.blit(self.font.render(f"Gold: {gold}", True, BLACK), (20, res_y))
+        res_y += 20
             
         # Pigeons UI
         pigeon_y = 300
@@ -438,30 +401,40 @@ class Game:
         report_y = 50
         
         # Helper for word wrapping
-        def draw_wrapped_text(surface, text, x, y, max_width, font, color):
-            words = text.split(' ')
-            line = ""
-            for word in words:
-                test_line = line + word + " "
-                if font.size(test_line)[0] < max_width:
-                    line = test_line
-                else:
-                    surface.blit(font.render(line, True, color), (x, y))
-                    y += 18
-                    line = word + " "
-            surface.blit(font.render(line, True, color), (x, y))
-            return y + 18
+        def get_wrapped_lines(text, max_width, font):
+            paragraphs = text.split('\n')
+            all_lines = []
+            for para in paragraphs:
+                words = para.split(' ')
+                line = ""
+                for word in words:
+                    test_line = line + word + " "
+                    if font.size(test_line)[0] < max_width:
+                        line = test_line
+                    else:
+                        all_lines.append(line)
+                        line = word + " "
+                all_lines.append(line)
+            return all_lines
 
         # Show newest at top
         for report in reversed(current_reports):
-            # Dynamic height calculation
-            num_sightings = len(report.get('friendly_adjacent', [])) + len(report.get('enemy_adjacent', []))
-            base_h = 45 if 'message' in report else 45 + (1 if num_sightings > 0 else 0) * 20
-            if not 'message' in report:
-                base_h += 20 # Strength line
-                base_h += num_sightings * 18
+            # Header height + padding
+            header_h = 25
+            max_txt_w = REPORT_PANEL_WIDTH - 20
             
-            box_h = max(60, base_h + 10)
+            # Calculate content height
+            if 'message' in report:
+                report_lines = get_wrapped_lines(report['message'], max_txt_w, self.font)
+                content_h = len(report_lines) * 18
+            else:
+                num_sightings = len(report.get('friendly_adjacent', [])) + len(report.get('enemy_adjacent', []))
+                content_h = 20 # Strength line
+                if num_sightings > 0:
+                    content_h += 20 # "Sightings" header (implied or just space)
+                    content_h += num_sightings * 18
+            
+            box_h = max(60, header_h + content_h + 10)
             if report_y + box_h > SCREEN_HEIGHT: break
             
             box_rect = pygame.Rect(SCREEN_WIDTH - REPORT_PANEL_WIDTH + 5, report_y, REPORT_PANEL_WIDTH - 10, box_h)
@@ -473,24 +446,28 @@ class Game:
             max_txt_w = REPORT_PANEL_WIDTH - 20
             
             # Header: Turn and Pos
-            turn_val = report.get('turn_received', '?')
-            header_text = f"Turn {turn_val} | Pos: ({report['position'][0]}, {report['position'][1]})"
+            turn_received = report.get('turn_received', '?')
+            header_text = f"Turn {turn_received} | Pos: {report['position']}"
+            if 'available_turn' in report:
+                header_text += f" | Re-avail: {report['available_turn']}"
             self.screen.blit(pygame.font.SysFont("Arial", 14, bold=True).render(header_text, True, BLACK), (x, y))
             y += 20
             
             if 'message' in report:
-                y = draw_wrapped_text(self.screen, report['message'], x, y, max_txt_w, self.font, RED)
+                for line in report_lines:
+                    self.screen.blit(self.font.render(line, True, RED), (x, y))
+                    y += 18
             else:
                 self.screen.blit(self.font.render(f"Strength: {report['count']}", True, BLACK), (x, y))
                 y += 20
                 
-                # Sightings with coordinates
+                # Sightings with vertex names
                 for f in report.get('friendly_adjacent', []):
-                    txt = f"Ally: {f['count']} @({f['pos'][0]},{f['pos'][1]})"
+                    txt = f"Ally: {f['count']} @{f['pos']}"
                     self.screen.blit(self.font.render(txt, True, BLUE), (x, y))
                     y += 18
                 for e in report.get('enemy_adjacent', []):
-                    txt = f"ENEMY: {e['count']} @({e['pos'][0]},{e['pos'][1]})"
+                    txt = f"ENEMY: {e['count']} @{e['pos']}"
                     self.screen.blit(self.font.render(txt, True, RED), (x, y))
                     y += 18
             
@@ -608,7 +585,7 @@ class Game:
                                         if menu_result.get("prepare_split"):
                                             source_node, target_node = menu_result["data"]
                                             self.context_menu.options = [
-                                                {"label": f"Move All -> ({target_node.x}, {target_node.y})", "command": "move_attack", "data": (source_node, target_node)},
+                                                {"label": f"Move All -> {target_node.name}", "command": "move_attack", "data": (source_node, target_node)},
                                                 {"label": "Split & Move:", "command": "move_attack", "data": (source_node, target_node), "is_splitter": True, "amount": 10},
                                                 {"label": "Cancel", "command": "hide"}
                                             ]
@@ -632,8 +609,6 @@ class Game:
                                             source_node, target_node = data
                                             count = menu_result.get("amount")
                                             self.state.send_pigeon_to_tile(self.state.turn, source_node, "move_attack", target_node, count=count)
-                                        elif cmd == "build":
-                                            self.state.send_pigeon_to_tile(self.state.turn, data, "build", None)
                                 elif in_map_area:
                                     # Start drag for panning
                                     self.is_dragging = True
@@ -657,13 +632,11 @@ class Game:
                                         options = []
                                         
                                         # Uniform commands for all tiles to maintain uncertainty
-                                        options.append({"label": f"Send Report to ({node.x}, {node.y})", "command": "report", "data": node})
-                                        
-                                        options.append({"label": f"Build Outpost at ({node.x}, {node.y})", "command": "build", "data": node})
+                                        options.append({"label": f"Send Report to {node.name}", "command": "report", "data": node})
                                         
                                         for neighbor in node.neighbors:
                                             options.append({
-                                                "label": f"Order Move/Attack -> ({neighbor.x}, {neighbor.y})",
+                                                "label": f"Order Move/Attack -> {neighbor.name}",
                                                 "command": "move_attack",
                                                 "prepare_split": True,
                                                 "data": (node, neighbor)

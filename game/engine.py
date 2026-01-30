@@ -42,10 +42,7 @@ class GameState:
         
         self.units = []
         self.turn = 0  # 0 for player, 1 for enemy
-        self.resources = [
-            {"gold": 20, "food": 10, "stone": 10, "wood": 10},
-            {"gold": 20, "food": 10, "stone": 10, "wood": 10}
-        ]
+        self.gold = [20, 20]
         self.pigeons = []
         self.pigeon_limit = [1, 1]
         self.turn_count = 1
@@ -68,12 +65,6 @@ class GameState:
         self.mode = mode
         self.visible_nodes = [set(), set()]
         
-        # Distribute some resources on the map (only on nodes without structures)
-        for node in self.nodes:
-            if node.structure is None and random.random() < 0.4:
-                res_type = random.choice(["gold", "food", "stone", "wood"])
-                node.resources[res_type] = random.randint(10, 30)
-
         self.game_over = False
         self.winner = None
         
@@ -96,7 +87,7 @@ class GameState:
     def get_unit_report(self, unit):
         """Returns dict with unit information for report display"""
         report = {
-            'position': (unit.node.x, unit.node.y),
+            'position': unit.node.name,
             'count': unit.count,
             'friendly_adjacent': [],
             'enemy_adjacent': []
@@ -105,7 +96,7 @@ class GameState:
         for neighbor in unit.node.neighbors:
             units_at_neighbor = self.get_units_at(neighbor)
             for u in units_at_neighbor:
-                info = {'pos': (neighbor.x, neighbor.y), 'count': u.count}
+                info = {'pos': neighbor.name, 'count': u.count}
                 if u.owner == unit.owner:
                     report['friendly_adjacent'].append(info)
                 else:
@@ -115,7 +106,7 @@ class GameState:
 
     def recruit_unit(self, player_id):
         cost = 10 
-        if self.resources[player_id]["gold"] >= cost:
+        if self.gold[player_id] >= cost:
             spawn_node = self.player_castle_node if player_id == 0 else self.enemy_castle_node
             friendly_units = [u for u in self.get_units_at(spawn_node) if u.owner == player_id]
             
@@ -125,7 +116,7 @@ class GameState:
                 new_unit = Unit(player_id, "Soldier", spawn_node, count=10)
                 self.units.append(new_unit)
             
-            self.resources[player_id]["gold"] -= cost
+            self.gold[player_id] -= cost
             return True
         return False
     
@@ -133,7 +124,8 @@ class GameState:
         """Merges all units of the same owner on the same node"""
         for node in self.nodes:
             for owner in [0, 1]:
-                units_here = [u for u in self.get_units_at(node) if u.owner == owner]
+                # Only merge units that are not currently traveling
+                units_here = [u for u in self.get_units_at(node) if u.owner == owner and (getattr(u, 'travel_remaining', 0) == 0)]
                 if len(units_here) > 1:
                     total_count = sum(u.count for u in units_here)
                     # Keep the first unit, update its count, remove the others
@@ -168,12 +160,12 @@ class GameState:
         active_pigeons = [p for p in self.pigeons if p.owner == player_id]
         if len(active_pigeons) < self.pigeon_limit[player_id]:
             source = self.player_castle_node if player_id == 0 else self.enemy_castle_node
-            unit_travel_time = self.calculate_travel_time(source, unit.node)
-            travel_time = math.ceil(unit_travel_time / 2)
+            travel_time = self.calculate_travel_time(source, unit.node)
             new_pigeon = Pigeon(player_id, source, unit.node, {"type": command_type, "data": data}, units=[unit])
             new_pigeon.turns_to_reach = travel_time
             new_pigeon.total_turns = travel_time
             self.pigeons.append(new_pigeon)
+            self.create_dispatch_report(player_id, new_pigeon, unit.node)
             return True
         return False
 
@@ -182,8 +174,7 @@ class GameState:
         active_pigeons = [p for p in self.pigeons if p.owner == player_id]
         if len(active_pigeons) < self.pigeon_limit[player_id]:
             source = self.player_castle_node if player_id == 0 else self.enemy_castle_node
-            unit_travel_time = self.calculate_travel_time(source, target_node)
-            travel_time = math.ceil(unit_travel_time / 2)
+            travel_time = self.calculate_travel_time(source, target_node)
             command = {"type": command_type, "data": data}
             if count is not None:
                 command["count"] = count
@@ -191,14 +182,46 @@ class GameState:
             new_pigeon.turns_to_reach = travel_time
             new_pigeon.total_turns = travel_time
             self.pigeons.append(new_pigeon)
+            self.create_dispatch_report(player_id, new_pigeon, target_node)
             return True
         return False
 
-    def resolve_combat(self, attacker_node, defender_node):
-        """Pairwise duel system: Each unit pairs up against an enemy unit. Both roll d6."""
-        attackers = [u for u in self.get_units_at(attacker_node)]
-        defenders = [u for u in self.get_units_at(defender_node)]
+    def create_dispatch_report(self, player_id, pigeon, target_node):
+        """Creates an instant mini-report when a pigeon is dispatched."""
+        # Even with distance 0, a pigeon takes at least 1 turn to deliver and 1 to return
+        # due to the phase-based movement (update in Phase 4, deliver/return in Phase 3).
+        effective_dist = max(1, pigeon.turns_to_reach)
+        return_time = effective_dist * 2  # Outbound + return trip
         
+        cmd_type = pigeon.command.get('type', 'unknown')
+        source_tile = target_node.name
+        
+        lines = [f"Target: {source_tile}"]
+        
+        if cmd_type == 'move_attack':
+            move_target = pigeon.command.get('data')
+            target_tile = move_target.name if hasattr(move_target, 'name') else str(move_target)
+            lines.append(f"Task: Move -> {target_tile}")
+        elif cmd_type == 'report':
+            lines.append(f"Task: Scouting")
+        else:
+            lines.append(f"Task: {cmd_type.title()}")
+            
+        lines.append(f"Avail: Turn {self.turn_count + return_time}")
+        
+        report = {
+            'position': target_node.name,
+            'turn_sent': self.turn_count,
+            'destination': target_node.name,
+            'task': cmd_type,
+            'available_turn': self.turn_count + return_time,
+            'message': "\n".join(lines),
+            'turn_received': self.turn_count  # Show immediately
+        }
+        self.reports[player_id].append(report)
+
+    def resolve_combat(self, attackers, defenders):
+        """Pairwise duel system: Each unit pairs up against an enemy unit. Both roll d6."""
         if not attackers or not defenders:
             return
 
@@ -222,14 +245,11 @@ class GameState:
                 r_d = random.randint(1, 6)
                 if r_a > r_d: # Attacker wins
                     a_survivors += 1
-                    print(f"Duel Win: A({r_a}) vs D({r_d}) -> D unit lost")
                 elif r_d > r_a: # Defender wins
                     d_survivors += 1
-                    print(f"Duel Loss: A({r_a}) vs D({r_d}) -> A unit lost")
                 else: # Tie
                     a_survivors += 1
                     d_survivors += 1
-                    print(f"Duel Tie: A({r_a}) vs D({r_d}) -> Both survive")
             
             # 2. Extra units from A fight survivors of D
             if a_ready > 0 and d_survivors > 0:
@@ -269,9 +289,7 @@ class GameState:
             d_total = d_survivors
 
         # Update unit counts
-        # This is a bit tricky with multiple unit stacks, so we distribute losses
         def distribute_count(unit_list, new_total):
-            # Simple redistribution: wipe all and set the first one to new_total
             for u in unit_list:
                 u.count = 0
             if unit_list and new_total > 0:
@@ -303,12 +321,10 @@ class GameState:
                         self.visible_nodes[p].add(node)
                 continue
                 
-            # Fog mode: see units and their neighbors
+            # Fog mode: only see the vertex where the unit stands (no adjacent visibility)
             for unit in self.units:
                 if unit.owner == p:
                     self.visible_nodes[p].add(unit.node)
-                    for neighbor in unit.node.neighbors:
-                        self.visible_nodes[p].add(neighbor)
 
     def execute_command(self, unit, command):
         if command["type"] == "move_attack":
@@ -333,13 +349,6 @@ class GameState:
                 moving_unit.travel_remaining = travel_time
                 moving_unit.travel_command = command
                 
-        elif command["type"] == "build":
-            if unit.node.structure is None:
-                owner = unit.owner
-                if self.resources[owner]["gold"] >= 20:
-                    self.resources[owner]["gold"] -= 20
-                    unit.node.structure = "Outpost"
-                    unit.node.structure_owner = owner
         elif command["type"] == "report":
             return self.get_unit_report(unit)
         return None
@@ -350,37 +359,45 @@ class GameState:
             return
 
         target_node = moving_unit.travel_target
-        enemies = [u for u in self.get_units_at(target_node) if u.owner != moving_unit.owner]
+        # Only fight with enemies already at the target node (not those also traveling elsewhere)
+        enemies = [u for u in self.get_units_at(target_node) if u.owner != moving_unit.owner and getattr(u, 'travel_remaining', 0) == 0]
         
         if not enemies:
-            # Empty tile - just move
+            # Empty tile or only friendly/traveling units - just move in
             moving_unit.node = target_node
-            # Merge with existing friendly units at target
-            friendlies = [u for u in self.get_units_at(target_node) if u.owner == moving_unit.owner and u != moving_unit]
+            # Merge with existing non-traveling friendly units at target
+            friendlies = [u for u in self.get_units_at(target_node) if u.owner == moving_unit.owner and u != moving_unit and getattr(u, 'travel_remaining', 0) == 0]
             if friendlies:
                 friendlies[0].count += moving_unit.count
                 if moving_unit in self.units:
                     self.units.remove(moving_unit)
         else:
-            # Enemy present - attack (All units at source fight, but only survivors continue)
-            self.resolve_combat(moving_unit.node, target_node)
+            # Enemy present - attack
+            # Only the arriving unit fights (plus any non-traveling allies already at target)
+            allies_at_target = [u for u in self.get_units_at(target_node) if u.owner == moving_unit.owner and getattr(u, 'travel_remaining', 0) == 0]
+            attackers = [moving_unit] + allies_at_target
+            self.resolve_combat(attackers, enemies)
             
-            # Check if the moving detachment survived
-            if moving_unit in self.units:
-                remaining_enemies = [u for u in self.get_units_at(target_node) if u.owner != moving_unit.owner]
+            # Check if any attackers survived and enemies are cleared
+            if moving_unit in self.units or any(u in self.units for u in allies_at_target):
+                remaining_enemies = [u for u in self.get_units_at(target_node) if u.owner != moving_unit.owner and getattr(u, 'travel_remaining', 0) == 0]
                 if not remaining_enemies:
-                    # All enemies defeated - move in
-                    moving_unit.node = target_node
-                    friendlies = [u for u in self.get_units_at(target_node) if u.owner == moving_unit.owner and u != moving_unit]
-                    if friendlies:
-                        friendlies[0].count += moving_unit.count
-                        if moving_unit in self.units:
-                            self.units.remove(moving_unit)
+                    # All enemies defeated - move in if survived
+                    if moving_unit in self.units:
+                        moving_unit.node = target_node
+                        # Final check for merge after moving in
+                        friendlies = [u for u in self.get_units_at(target_node) if u.owner == moving_unit.owner and u != moving_unit and getattr(u, 'travel_remaining', 0) == 0]
+                        if friendlies:
+                            friendlies[0].count += moving_unit.count
+                            if moving_unit in self.units:
+                                self.units.remove(moving_unit)
         
-        # Clear travel state
-        moving_unit.travel_target = None
-        moving_unit.travel_remaining = 0
-        moving_unit.travel_command = None
+        # Clear travel state if unit still exists
+        for u in self.units:
+            if u == moving_unit:
+                u.travel_target = None
+                u.travel_remaining = 0
+                u.travel_command = None
 
     def advance_phase(self):
         """Advances the game to the next phase. Returns True if turn ended."""
@@ -434,16 +451,15 @@ class GameState:
                 else:
                     # No units found at target node
                     pigeon.payload = {
-                        'position': (pigeon.target_node.x, pigeon.target_node.y),
+                        'position': pigeon.target_node.name,
                         'message': "No units found at destination to execute order",
                         'count': 0,
                         'friendly_adjacent': [],
                         'enemy_adjacent': []
                     }
                 
-                # Immediately prepare for return trip using halved path travel time
-                unit_travel_back_time = self.calculate_travel_time(pigeon.target_node, pigeon.source_node)
-                travel_back_time = math.ceil(unit_travel_back_time / 2)
+                # Immediately prepare for return trip using full path travel time (same as units)
+                travel_back_time = self.calculate_travel_time(pigeon.target_node, pigeon.source_node)
                 pigeon.returning = True
                 pigeon.arrived = False
                 pigeon.turns_to_reach = travel_back_time 
@@ -494,18 +510,9 @@ class GameState:
 
     def process_end_of_turn(self):
         """Phase 6: Resource generation and turn transition"""
-        # Resource Generation (Structures only)
-        for node in self.nodes:
-            if node.structure and node.structure_owner is not None:
-                owner = node.structure_owner
-                for res, amount in node.resources.items():
-                    if amount > 0:
-                        harvest = 5 
-                        self.resources[owner][res] += harvest
-
         # Base income
-        self.resources[0]["gold"] += 5
-        self.resources[1]["gold"] += 5
+        self.gold[0] += 5
+        self.gold[1] += 5
 
         # Merge units to clean up map
         self.merge_units()
@@ -533,10 +540,10 @@ class GameState:
         elif p2_at_player_castle:
             self.game_over = True
             self.winner = 1
-        elif not enemy_units and self.resources[1]["gold"] < 10 and self.turn_count > 10:
+        elif not enemy_units and self.gold[1] < 10 and self.turn_count > 10:
             self.game_over = True
             self.winner = 0
-        elif not player_units and self.resources[0]["gold"] < 10 and self.turn_count > 10:
+        elif not player_units and self.gold[0] < 10 and self.turn_count > 10:
             self.game_over = True
             self.winner = 1
         

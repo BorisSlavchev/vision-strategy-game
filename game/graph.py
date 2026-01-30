@@ -3,13 +3,13 @@ import os
 
 
 class Node:
-    def __init__(self, x, y, id):
+    def __init__(self, x, y, id, name=None):
         self.x = x
         self.y = y
         self.id = id
+        self.name = name if name else str(id)
         self.neighbors = []
         self.neighbor_travel_times = {}  # {neighbor_node: travel_time}
-        self.resources = {"gold": 0, "food": 0, "stone": 0, "wood": 0}
         self.structure = None  # e.g., "Castle", "Outpost"
         self.structure_owner = None  # 0 or 1
 
@@ -26,6 +26,15 @@ class Node:
         return f"Node({self.x}, {self.y})"
 
 
+def generate_vertex_name(index):
+    """Generates names like A, B, C... Z, AA, AB..."""
+    name = ""
+    while index >= 0:
+        name = chr(ord('A') + (index % 26)) + name
+        index = (index // 26) - 1
+    return name
+
+
 def create_grid(width=3, height=3):
     """Legacy function - creates a uniform grid for backwards compatibility."""
     nodes = {}
@@ -33,7 +42,7 @@ def create_grid(width=3, height=3):
     for y in range(height):
         for x in range(width):
             node_id = y * width + x
-            nodes[(x, y)] = Node(x, y, node_id)
+            nodes[(x, y)] = Node(x, y, node_id, name=generate_vertex_name(node_id))
 
     # Connect neighbors
     for y in range(height):
@@ -61,13 +70,14 @@ def create_map_from_json(map_path):
     nodes = {}
     
     # Create nodes
-    for node_def in map_data["nodes"]:
-        node = Node(node_def["x"], node_def["y"], node_def["id"])
+    for i, node_def in enumerate(map_data["nodes"]):
+        node_id = node_def["id"]
+        # Use name from JSON if available, otherwise generate it
+        name = node_def.get("name") or generate_vertex_name(i)
+        node = Node(node_def["x"], node_def["y"], node_id, name=name)
         node.structure = node_def.get("structure")
         node.structure_owner = node_def.get("structure_owner")
-        for res, amt in node_def.get("resources", {}).items():
-            node.resources[res] = amt
-        nodes[node_def["id"]] = node
+        nodes[node_id] = node
 
     # Create edges (bidirectional)
     for edge in map_data["edges"]:

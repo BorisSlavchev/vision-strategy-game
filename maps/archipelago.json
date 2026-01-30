@@ -6,43 +6,51 @@
             "id": 0,
             "x": 0,
             "y": 0,
+            "name": "A",
             "structure": "Castle",
             "structure_owner": 0
         },
         {
             "id": 1,
             "x": 2,
-            "y": 0
+            "y": 0,
+            "name": "B"
         },
         {
             "id": 2,
             "x": 4,
-            "y": 0
+            "y": 0,
+            "name": "C"
         },
         {
             "id": 3,
             "x": 1,
-            "y": 2
+            "y": 2,
+            "name": "D"
         },
         {
             "id": 4,
             "x": 3,
-            "y": 2
+            "y": 2,
+            "name": "E"
         },
         {
             "id": 5,
             "x": 0,
-            "y": 4
+            "y": 4,
+            "name": "F"
         },
         {
             "id": 6,
             "x": 2,
-            "y": 4
+            "y": 4,
+            "name": "G"
         },
         {
             "id": 7,
             "x": 4,
             "y": 4,
+            "name": "H",
             "structure": "Castle",
             "structure_owner": 1
         }
