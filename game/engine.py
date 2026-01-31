@@ -19,6 +19,91 @@ class Unit:
         self.travel_remaining = 0
         self.travel_command = None # Store the command to execute on arrival (e.g. move_attack)
 
+        # Event History
+        self.history_log = []
+        self.last_observed = {} # {node_id: {'count': count, 'owner': owner}}
+
+    def log_event(self, event_type, turn, details):
+        """Append a new event to the history log"""
+        self.history_log.append({
+            'type': event_type,
+            'turn': turn,
+            'details': details
+        })
+
+    def get_and_clear_log(self):
+        """Returns the current log and empties it"""
+        log = self.history_log[:]
+        self.history_log = []
+        return log
+
+    def observe_surroundings(self, game_state):
+        """Passively observe adjacent tiles and log changes, including movements between visible tiles"""
+        if getattr(self, 'travel_remaining', 0) > 0:
+            return
+
+        # 1. Collect current counts for all neighbors
+        observations = {} # {node_id: {owner: count}}
+        for neighbor in self.node.neighbors:
+            units_here = game_state.get_units_at(neighbor)
+            visible_units = [u for u in units_here if getattr(u, 'travel_remaining', 0) == 0]
+            current_counts = {}
+            for u in visible_units:
+                current_counts[u.owner] = current_counts.get(u.owner, 0) + u.count
+            observations[neighbor.id] = current_counts
+
+        # 2. Process changes per owner
+        for owner in [0, 1]:
+            owner_label = "Ally" if owner == self.owner else "ENEMY"
+            departures = [] # (node_name, diff, remaining)
+            arrivals = []   # (node_name, diff, total)
+            
+            for neighbor in self.node.neighbors:
+                curr_count = observations[neighbor.id].get(owner, 0)
+                prev_count = self.last_observed.get(neighbor.id, {}).get(owner, 0)
+                
+                if curr_count < prev_count:
+                    departures.append((neighbor.name, prev_count - curr_count, curr_count))
+                elif curr_count > prev_count:
+                    arrivals.append((neighbor.name, curr_count - prev_count, curr_count))
+                elif curr_count > 0 and prev_count == 0:
+                    # This case handled by arrivals logic above, keeping as comment for clarity
+                    pass
+
+            # 3. Match movements between visible neighbors
+            used_arrivals = set()
+            used_departures = set()
+            
+            # Match exact counts first
+            for i, (d_node, d_diff, d_rem) in enumerate(departures):
+                for j, (a_node, a_diff, a_total) in enumerate(arrivals):
+                    if j not in used_arrivals and d_diff == a_diff:
+                        self.log_event(f"{owner_label.lower()}_move", game_state.turn_count,
+                                     f"Observed {d_diff} {owner_label}s moving from {d_node} to {a_node}")
+                        used_arrivals.add(j)
+                        used_departures.add(i)
+                        break
+            
+            # Log remaining departures
+            for i, (d_node, d_diff, d_rem) in enumerate(departures):
+                if i not in used_departures:
+                    # Try to see if there's any arrival that could be a destination (even if partial)
+                    possible_dest = [a[0] for j, a in enumerate(arrivals) if j not in used_arrivals]
+                    dest_str = f" towards {possible_dest[0]}" if possible_dest else " into the fog"
+                    remaining_str = f" ({d_rem} remain)" if d_rem > 0 else " (None remain)"
+                    self.log_event(f"{owner_label.lower()}_departure", game_state.turn_count,
+                                 f"Observed {d_diff} {owner_label}s leaving {d_node}{dest_str}{remaining_str}")
+
+            # Log remaining arrivals
+            for j, (a_node, a_diff, a_total) in enumerate(arrivals):
+                if j not in used_arrivals:
+                    self.log_event(f"{owner_label.lower()}_arrival", game_state.turn_count,
+                                 f"Observed {a_diff} {owner_label}s arriving at {a_node} (Total: {a_total})")
+
+        # 4. Update memory
+        for neighbor in self.node.neighbors:
+            self.last_observed[neighbor.id] = observations[neighbor.id]
+
 class GameState:
     def __init__(self, mode="God", automated_phases=True, map_name="default_3x3"):
         self.automated_phases = automated_phases
@@ -69,8 +154,13 @@ class GameState:
         self.winner = None
         
         # Add starting units
-        self.units.append(Unit(0, "Soldier", self.player_castle_node, count=10))
-        self.units.append(Unit(1, "Soldier", self.enemy_castle_node, count=10))
+        u0 = Unit(0, "Soldier", self.player_castle_node, count=10)
+        u0.log_event("spawn", 1, f"Initial deployment at {self.player_castle_node.name}")
+        self.units.append(u0)
+        
+        u1 = Unit(1, "Soldier", self.enemy_castle_node, count=10)
+        u1.log_event("spawn", 1, f"Initial deployment at {self.enemy_castle_node.name}")
+        self.units.append(u1)
         
         self.update_visibility()
         self.merge_units()
@@ -90,9 +180,11 @@ class GameState:
             'position': unit.node.name,
             'count': unit.count,
             'friendly_adjacent': [],
-            'enemy_adjacent': []
+            'enemy_adjacent': [],
+            'history': []
         }
         
+        # Immediate sightings for the report UI (not logged to history here as history is polled next)
         for neighbor in unit.node.neighbors:
             units_at_neighbor = self.get_units_at(neighbor)
             for u in units_at_neighbor:
@@ -102,6 +194,7 @@ class GameState:
                 else:
                     report['enemy_adjacent'].append(info)
         
+        report['history'] = unit.get_and_clear_log()
         return report
 
     def recruit_unit(self, player_id):
@@ -112,8 +205,10 @@ class GameState:
             
             if friendly_units:
                 friendly_units[0].count += 10
+                friendly_units[0].log_event("recruit_added", self.turn_count, "10 reinforcements recruited")
             else:
                 new_unit = Unit(player_id, "Soldier", spawn_node, count=10)
+                new_unit.log_event("spawn", self.turn_count, f"Recruited at {spawn_node.name}")
                 self.units.append(new_unit)
             
             self.gold[player_id] -= cost
@@ -131,9 +226,17 @@ class GameState:
                     # Keep the first unit, update its count, remove the others
                     main_unit = units_here[0]
                     main_unit.count = total_count
+                    
+                    # Merge history logs and track counts
+                    merged_counts = []
                     for extra_unit in units_here[1:]:
+                        merged_counts.append(str(extra_unit.count))
+                        main_unit.history_log.extend(extra_unit.history_log)
                         if extra_unit in self.units:
                             self.units.remove(extra_unit)
+                    
+                    counts_str = ", ".join(merged_counts)
+                    main_unit.log_event("merge", self.turn_count, f"Merged with {len(merged_counts)} groups ({counts_str}) at {node.name}. Total: {total_count}")
 
     def calculate_travel_time(self, source, target):
         """BFS to find shortest travel time between source and target."""
@@ -303,6 +406,14 @@ class GameState:
         distribute_count(attackers, a_total)
         distribute_count(defenders, d_total)
 
+        # Log combat result
+        for u in attackers:
+            if u in self.units:
+                u.log_event("combat", self.turn_count, f"Combat result: {u.count} survivors")
+        for u in defenders:
+            if u in self.units:
+                u.log_event("combat", self.turn_count, f"Combat result: {u.count} survivors")
+
     def update_visibility(self):
         for p in range(2):
             self.visible_nodes[p].clear()
@@ -338,8 +449,14 @@ class GameState:
                 if move_count < unit.count:
                     # Create detachment
                     moving_unit = Unit(unit.owner, unit.unit_type, unit.node, count=move_count)
+                    # Do not copy history as it leads to duplication upon re-merge.
+                    # The split event provides sufficient context.
+                    
                     unit.count -= move_count
                     self.units.append(moving_unit)
+                    
+                    unit.log_event("split", self.turn_count, f"Detached {move_count} units for move to {target_node.name}")
+                    moving_unit.log_event("split", self.turn_count, f"Detached from main force at {unit.node.name}")
                 else:
                     moving_unit = unit
 
@@ -348,6 +465,8 @@ class GameState:
                 moving_unit.travel_target = target_node
                 moving_unit.travel_remaining = travel_time
                 moving_unit.travel_command = command
+                
+                moving_unit.log_event("move_start", self.turn_count, f"Started move to {target_node.name} (ETA: {travel_time} turns)")
                 
         elif command["type"] == "report":
             return self.get_unit_report(unit)
@@ -359,6 +478,8 @@ class GameState:
             return
 
         target_node = moving_unit.travel_target
+        moving_unit.log_event("move_arrive", self.turn_count, f"Arrived at {target_node.name}")
+
         # Only fight with enemies already at the target node (not those also traveling elsewhere)
         enemies = [u for u in self.get_units_at(target_node) if u.owner != moving_unit.owner and getattr(u, 'travel_remaining', 0) == 0]
         
@@ -368,11 +489,16 @@ class GameState:
             # Merge with existing non-traveling friendly units at target
             friendlies = [u for u in self.get_units_at(target_node) if u.owner == moving_unit.owner and u != moving_unit and getattr(u, 'travel_remaining', 0) == 0]
             if friendlies:
+                old_count = friendlies[0].count
                 friendlies[0].count += moving_unit.count
+                # Merge history logs
+                friendlies[0].history_log.extend(moving_unit.history_log)
+                friendlies[0].log_event("merge", self.turn_count, f"Merged {moving_unit.count} arriving soldiers with {old_count} stationed at {target_node.name}")
                 if moving_unit in self.units:
                     self.units.remove(moving_unit)
         else:
             # Enemy present - attack
+            moving_unit.log_event("enemy_spotted", self.turn_count, f"Engaged enemy at {target_node.name}")
             # Only the arriving unit fights (plus any non-traveling allies already at target)
             allies_at_target = [u for u in self.get_units_at(target_node) if u.owner == moving_unit.owner and getattr(u, 'travel_remaining', 0) == 0]
             attackers = [moving_unit] + allies_at_target
@@ -388,7 +514,10 @@ class GameState:
                         # Final check for merge after moving in
                         friendlies = [u for u in self.get_units_at(target_node) if u.owner == moving_unit.owner and u != moving_unit and getattr(u, 'travel_remaining', 0) == 0]
                         if friendlies:
+                            old_count = friendlies[0].count
                             friendlies[0].count += moving_unit.count
+                            friendlies[0].history_log.extend(moving_unit.history_log)
+                            friendlies[0].log_event("merge", self.turn_count, f"Merged {moving_unit.count} battle survivors with {old_count} stationed at {target_node.name}")
                             if moving_unit in self.units:
                                 self.units.remove(moving_unit)
         
@@ -513,6 +642,11 @@ class GameState:
         # Base income
         self.gold[0] += 5
         self.gold[1] += 5
+
+        # All units passively observe their surroundings before turn ends
+        for unit in self.units:
+            if unit.owner == self.turn:
+                unit.observe_surroundings(self)
 
         # Merge units to clean up map
         self.merge_units()

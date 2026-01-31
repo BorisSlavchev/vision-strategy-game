@@ -237,6 +237,13 @@ class Game:
         self.camera_start_x = 0
         self.camera_start_y = 0
         
+        # Report UI State
+        self.report_popup_visible = False
+        self.report_popup_content = None
+        self.sidebar_scroll_offset = 0
+        self.popup_scroll_offset = 0
+        self.report_boxes = [] # Track areas (rect, report) for click detection
+        
         # Map selection
         self.maps_dir = os.path.join(os.path.dirname(__file__), "maps")
         self.available_maps = get_available_maps(self.maps_dir)
@@ -478,89 +485,60 @@ class Game:
             self.screen.blit(self.font.render(ctrl, True, BLACK), (ctrl_x + 10, curr_y + 25 + i * 20))
 
         # Draw Report Panel (Right)
-        pygame.draw.rect(self.screen, GRAY, (SCREEN_WIDTH - REPORT_PANEL_WIDTH, 0, REPORT_PANEL_WIDTH, SCREEN_HEIGHT))
+        sidebar_rect = pygame.Rect(SCREEN_WIDTH - REPORT_PANEL_WIDTH, 0, REPORT_PANEL_WIDTH, SCREEN_HEIGHT)
+        pygame.draw.rect(self.screen, GRAY, sidebar_rect)
         pygame.draw.line(self.screen, BLACK, (SCREEN_WIDTH - REPORT_PANEL_WIDTH, 0), (SCREEN_WIDTH - REPORT_PANEL_WIDTH, SCREEN_HEIGHT), 2)
         
         report_header = f"{'Player' if self.state.turn == 0 else 'Enemy'} Reports"
         header_surf = self.ui_font.render(report_header, True, BLACK)
         self.screen.blit(header_surf, (SCREEN_WIDTH - REPORT_PANEL_WIDTH + 10, 10))
         
-        # Draw accumulated reports for current player
+        # Draw accumulated reports for current player with clipping and scrolling
         current_reports = self.state.reports[self.state.turn]
-        report_y = 50
         
-        # Helper for word wrapping
-        def get_wrapped_lines(text, max_width, font):
-            paragraphs = text.split('\n')
-            all_lines = []
-            for para in paragraphs:
-                words = para.split(' ')
-                line = ""
-                for word in words:
-                    test_line = line + word + " "
-                    if font.size(test_line)[0] < max_width:
-                        line = test_line
-                    else:
-                        all_lines.append(line)
-                        line = word + " "
-                all_lines.append(line)
-            return all_lines
-
+        # Define sidebar content area for clipping
+        content_rect = pygame.Rect(SCREEN_WIDTH - REPORT_PANEL_WIDTH, 50, REPORT_PANEL_WIDTH, SCREEN_HEIGHT - 50)
+        self.screen.set_clip(content_rect)
+        
+        report_y = 50 - self.sidebar_scroll_offset
+        self.report_boxes = []
+        
         # Show newest at top
         for report in reversed(current_reports):
-            # Header height + padding
-            header_h = 25
-            max_txt_w = REPORT_PANEL_WIDTH - 20
-            
-            # Calculate content height
-            if 'message' in report:
-                report_lines = get_wrapped_lines(report['message'], max_txt_w, self.font)
-                content_h = len(report_lines) * 18
-            else:
-                num_sightings = len(report.get('friendly_adjacent', [])) + len(report.get('enemy_adjacent', []))
-                content_h = 20 # Strength line
-                if num_sightings > 0:
-                    content_h += 20 # "Sightings" header (implied or just space)
-                    content_h += num_sightings * 18
-            
-            box_h = max(60, header_h + content_h + 10)
-            if report_y + box_h > SCREEN_HEIGHT: break
-            
+            # Summary Box
+            box_h = 40
             box_rect = pygame.Rect(SCREEN_WIDTH - REPORT_PANEL_WIDTH + 5, report_y, REPORT_PANEL_WIDTH - 10, box_h)
-            pygame.draw.rect(self.screen, WHITE, box_rect)
-            pygame.draw.rect(self.screen, BLACK, box_rect, 1)
             
-            y = report_y + 5
-            x = SCREEN_WIDTH - REPORT_PANEL_WIDTH + 10
-            max_txt_w = REPORT_PANEL_WIDTH - 20
-            
-            # Header: Turn and Pos
-            turn_received = report.get('turn_received', '?')
-            header_text = f"Turn {turn_received} | Pos: {report['position']}"
-            if 'available_turn' in report:
-                header_text += f" | Re-avail: {report['available_turn']}"
-            self.screen.blit(pygame.font.SysFont("Arial", 14, bold=True).render(header_text, True, BLACK), (x, y))
-            y += 20
-            
-            if 'message' in report:
-                for line in report_lines:
-                    self.screen.blit(self.font.render(line, True, RED), (x, y))
-                    y += 18
-            else:
-                self.screen.blit(self.font.render(f"Strength: {report['count']}", True, BLACK), (x, y))
-                y += 20
+            # Only draw and track if visible (or partially visible) in the clip area
+            if box_rect.bottom > content_rect.top and box_rect.top < content_rect.bottom:
+                pygame.draw.rect(self.screen, WHITE, box_rect)
+                pygame.draw.rect(self.screen, BLACK, box_rect, 1)
                 
-                # Sightings with vertex names
-                for f in report.get('friendly_adjacent', []):
-                    txt = f"Ally: {f['count']} @{f['pos']}"
-                    self.screen.blit(self.font.render(txt, True, BLUE), (x, y))
-                    y += 18
-                for e in report.get('enemy_adjacent', []):
-                    txt = f"ENEMY: {e['count']} @{e['pos']}"
-                    self.screen.blit(self.font.render(txt, True, RED), (x, y))
-                    y += 18
-            
+                # Highlight if hovered
+                if box_rect.collidepoint(pygame.mouse.get_pos()) and not self.report_popup_visible:
+                    pygame.draw.rect(self.screen, (240, 240, 255), box_rect)
+                    pygame.draw.rect(self.screen, BLUE, box_rect, 1)
+                
+                turn_received = report.get('turn_received', '?')
+                summary = f"Turn {turn_received} | Pos: {report['position']}"
+                if report.get('message'):
+                    summary += " | Message"
+                elif 'history' in report and report['history']:
+                    summary += " | History"
+                
+                sum_surf = self.font.render(summary, True, BLACK)
+                self.screen.blit(sum_surf, (box_rect.x + 10, box_rect.y + 10))
+                
+                # Track for clicks
+                self.report_boxes.append((box_rect, report))
+                
             report_y += box_h + 5
+            
+        self.screen.set_clip(None)
+
+        # Draw report popup if visible
+        if self.report_popup_visible:
+            self.draw_report_popup()
 
         # Draw context menu on top
         self.context_menu.draw(self.screen)
@@ -574,6 +552,139 @@ class Game:
             self.screen.blit(text_surf, (SCREEN_WIDTH//2 - 150, SCREEN_HEIGHT//2))
 
 
+
+    def draw_report_popup(self):
+        if not self.report_popup_content:
+            return
+
+        report = self.report_popup_content
+        
+        # Dim background
+        overlay = pygame.Surface((SCREEN_WIDTH, SCREEN_HEIGHT), pygame.SRCALPHA)
+        overlay.fill((0, 0, 0, 100))
+        self.screen.blit(overlay, (0, 0))
+        
+        popup_w = 600
+        popup_h = 500
+        popup_rect = pygame.Rect((SCREEN_WIDTH - popup_w) // 2, (SCREEN_HEIGHT - popup_h) // 2, popup_w, popup_h)
+        
+        pygame.draw.rect(self.screen, WHITE, popup_rect)
+        pygame.draw.rect(self.screen, BLACK, popup_rect, 2)
+        
+        # Header
+        header_h = 40
+        header_rect = pygame.Rect(popup_rect.x, popup_rect.y, popup_rect.width, header_h)
+        pygame.draw.rect(self.screen, (230, 230, 230), header_rect)
+        pygame.draw.line(self.screen, BLACK, (popup_rect.x, popup_rect.y + header_h), (popup_rect.right, popup_rect.y + header_h), 1)
+        
+        turn = report.get('turn_received', '?')
+        title = f"Report: Turn {turn} | Location: {report['position']}"
+        self.screen.blit(self.ui_font.render(title, True, BLACK), (popup_rect.x + 15, popup_rect.y + 5))
+        
+        # Close button "X"
+        close_btn_rect = pygame.Rect(popup_rect.right - 35, popup_rect.y + 5, 30, 30)
+        pygame.draw.rect(self.screen, RED, close_btn_rect)
+        pygame.draw.rect(self.screen, BLACK, close_btn_rect, 1)
+        self.screen.blit(self.font.render("X", True, WHITE), (close_btn_rect.x + 10, close_btn_rect.y + 5))
+        self.close_btn_rect = close_btn_rect # Save for click detection
+        self.popup_rect = popup_rect # Save for click detection
+        
+        # Content with Scrolling
+        content_rect = pygame.Rect(popup_rect.x + 15, popup_rect.y + header_h + 10, popup_rect.width - 30, popup_rect.height - header_h - 25)
+        self.screen.set_clip(content_rect)
+        
+        curr_y = content_rect.y - self.popup_scroll_offset
+        max_w = content_rect.width - 20
+        
+        def draw_text(text, color=BLACK, bold=False):
+            nonlocal curr_y
+            f = pygame.font.SysFont("Arial", 18, bold=bold)
+            lines = self.get_wrapped_lines(text, max_w, f)
+            for line in lines:
+                surf = f.render(line, True, color)
+                self.screen.blit(surf, (content_rect.x, curr_y))
+                curr_y += 22
+
+        if 'message' in report:
+            draw_text("ORDER DETAILS", bold=True)
+            curr_y += 5
+            draw_text(report['message'])
+            curr_y += 10
+            if 'available_turn' in report:
+                draw_text(f"Pigeon return turn: {report['available_turn']}", color=DARK_GRAY)
+        else:
+            draw_text("UNIT STATUS", bold=True)
+            curr_y += 5
+            draw_text(f"Soldiers remaining: {report['count']}")
+            curr_y += 15
+            
+            draw_text("SIGHTINGS", bold=True)
+            curr_y += 5
+            if not report.get('friendly_adjacent') and not report.get('enemy_adjacent'):
+                draw_text("No nearby units spotted.", color=DARK_GRAY)
+            else:
+                for f in report.get('friendly_adjacent', []):
+                    draw_text(f"Ally: {f['count']} @{f['pos']}", color=BLUE)
+                for e in report.get('enemy_adjacent', []):
+                    draw_text(f"ENEMY: {e['count']} @{e['pos']}", color=RED)
+            curr_y += 15
+            
+            # History Section
+            draw_text("EVENT LOG", bold=True)
+            curr_y += 5
+            history = report.get('history', [])
+            if not history:
+                draw_text("No recent events logged.", color=DARK_GRAY)
+            else:
+                # Group history by turn
+                history_by_turn = {}
+                for h in history:
+                    t = h['turn']
+                    if t not in history_by_turn: history_by_turn[t] = []
+                    history_by_turn[t].append(h)
+
+                EVENT_COLORS = {
+                    'spawn': (0, 150, 0),   # Green
+                    'move_start': (100, 50, 150),  # Purple
+                    'move_arrive': (100, 50, 150),
+                    'split': (255, 165, 0),  # Orange
+                    'merge': (255, 165, 0),
+                    'combat': (139, 0, 0),  # Dark Red
+                    'recruit_added': (0, 150, 0),
+                    'ally_spotted': BLUE,
+                    'enemy_spotted': RED,
+                    'ally_move': BLUE,
+                    'enemy_move': RED,
+                    'ally_departure': BLUE,
+                    'enemy_departure': RED,
+                    'ally_arrival': BLUE,
+                    'enemy_arrival': RED,
+                }
+                
+                for t in sorted(history_by_turn.keys(), reverse=True):
+                    draw_text(f"--- Turn {t} ---", color=DARK_GRAY)
+                    for h in history_by_turn[t]:
+                        e_type = h['type']
+                        color = EVENT_COLORS.get(e_type, BLACK)
+                        draw_text(f"[{e_type.upper()}] {h['details']}", color=color)
+        
+        self.screen.set_clip(None)
+
+    def get_wrapped_lines(self, text, max_width, font):
+        paragraphs = text.split('\n')
+        all_lines = []
+        for para in paragraphs:
+            words = para.split(' ')
+            line = ""
+            for word in words:
+                test_line = line + word + " "
+                if font.size(test_line)[0] < max_width:
+                    line = test_line
+                else:
+                    all_lines.append(line)
+                    line = word + " "
+            all_lines.append(line)
+        return all_lines
 
     def draw(self):
         if self.ui_state == UIState.MAIN_MENU:
@@ -681,7 +792,10 @@ class Game:
                 
                 if event.type == pygame.KEYDOWN:
                     if event.key == pygame.K_ESCAPE:
-                        self.ui_state = UIState.MAIN_MENU
+                        if self.report_popup_visible:
+                            self.report_popup_visible = False
+                        else:
+                            self.ui_state = UIState.MAIN_MENU
                         continue
 
                 if self.ui_state == UIState.MAIN_MENU:
@@ -705,12 +819,27 @@ class Game:
                                             self.state.send_pigeon_to_tile(self.state.turn, data[0], cmd, data[1], count=val)
                                             self.context_menu.hide()
                                             break
-                            # If text input handled it, we might still want to process other events,
-                            # but let's be careful about double processing.
-                        
+
                         if event.type == pygame.MOUSEBUTTONDOWN:
                             if event.button == 1:  # Left click
-                                # Check if in map area for potential drag start
+                                # 1. Handle Report Popup
+                                if self.report_popup_visible:
+                                    if self.close_btn_rect.collidepoint(event.pos):
+                                        self.report_popup_visible = False
+                                    elif not self.popup_rect.collidepoint(event.pos):
+                                        self.report_popup_visible = False
+                                    continue # Consume click
+                                
+                                # 2. Handle Sidebar Click
+                                if event.pos[0] > SCREEN_WIDTH - REPORT_PANEL_WIDTH:
+                                    for rect, report in self.report_boxes:
+                                        if rect.collidepoint(event.pos):
+                                            self.report_popup_visible = True
+                                            self.report_popup_content = report
+                                            self.popup_scroll_offset = 0
+                                            break
+                                    continue
+
                                 in_map_area = event.pos[0] < SCREEN_WIDTH - REPORT_PANEL_WIDTH and event.pos[1] < SCREEN_HEIGHT - BOTTOM_PANEL_HEIGHT
                                 
                                 if self.context_menu.visible:
@@ -760,6 +889,8 @@ class Game:
                                     self.context_menu.hide()
 
                             elif event.button == 3: # Right click
+                                if self.report_popup_visible: continue
+                                
                                 # Clip mouse interaction to map area
                                 if event.pos[0] < SCREEN_WIDTH - REPORT_PANEL_WIDTH and event.pos[1] < SCREEN_HEIGHT - BOTTOM_PANEL_HEIGHT:
                                     # Restriction: Only allow right-click context menu in "Give Orders" phase
@@ -791,18 +922,27 @@ class Game:
                                     else:
                                         self.context_menu.hide()
                             elif event.button == 4 or event.button == 5: # Scroll wheel
-                                if self.context_menu.visible:
+                                scroll_dir = -1 if event.button == 4 else 1 # Negative scroll for wheel up
+                                
+                                if self.report_popup_visible:
+                                    self.popup_scroll_offset = max(0, self.popup_scroll_offset + scroll_dir * 30)
+                                elif self.context_menu.visible:
                                     change = 1 if event.button == 4 else -1
                                     for opt in self.context_menu.options:
                                         if opt.get("is_splitter"):
                                             opt["amount"] = max(1, opt["amount"] + change)
                                             if self.context_menu.text_input:
                                                 self.context_menu.text_input.set_text(str(opt["amount"]))
+                                # Sidebar scroll
+                                elif event.pos[0] > SCREEN_WIDTH - REPORT_PANEL_WIDTH:
+                                    self.sidebar_scroll_offset = max(0, self.sidebar_scroll_offset + scroll_dir * 30)
 
                         if event.type == pygame.KEYDOWN:
                             if event.key == pygame.K_SPACE:
                                 self.state.end_turn()
                                 self.context_menu.hide()
+                                # Reset scroll when turn changes
+                                self.sidebar_scroll_offset = 0
                         
                         # Handle mouse button release (stop dragging)
                         if event.type == pygame.MOUSEBUTTONUP:
@@ -811,7 +951,7 @@ class Game:
                         
                         # Handle mouse motion (panning)
                         if event.type == pygame.MOUSEMOTION:
-                            if self.is_dragging:
+                            if self.is_dragging and not self.report_popup_visible:
                                 dx = event.pos[0] - self.drag_start_x
                                 dy = event.pos[1] - self.drag_start_y
                                 self.camera_x = self.camera_start_x + dx
