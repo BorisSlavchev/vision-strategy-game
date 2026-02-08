@@ -12,15 +12,10 @@ from game.engine import GameState
 from game.graph import get_available_maps
 
 # Constants
-# Initial dimensions for windowed mode
-WINDOW_WIDTH = 1100
-WINDOW_HEIGHT = 800
+WINDOW_WIDTH = 1280
+WINDOW_HEIGHT = 720
 
-# Desktop dimensions will be stored here
-DESKTOP_WIDTH = 0
-DESKTOP_HEIGHT = 0
-
-# Screen dimensions will be set dynamically
+# Screen dimensions will be set to fixed window size
 SCREEN_WIDTH = WINDOW_WIDTH
 SCREEN_HEIGHT = WINDOW_HEIGHT
 
@@ -195,16 +190,10 @@ class Game:
     def __init__(self):
         pygame.init()
         
-        # Get desktop resolution and store it
-        info = pygame.display.Info()
-        global DESKTOP_WIDTH, DESKTOP_HEIGHT, SCREEN_WIDTH, SCREEN_HEIGHT, MAP_WIDTH, MAP_HEIGHT, GRID_OFFSET_X, GRID_OFFSET_Y
-        DESKTOP_WIDTH = info.current_w
-        DESKTOP_HEIGHT = info.current_h
-        
-        # Use a window sized slightly smaller than desktop to account for taskbars/titlebars
-        # This ensures the bottom isn't cut off and window buttons are visible
-        SCREEN_WIDTH = DESKTOP_WIDTH
-        SCREEN_HEIGHT = DESKTOP_HEIGHT - 80 
+        # Fixed window size
+        global SCREEN_WIDTH, SCREEN_HEIGHT, MAP_WIDTH, MAP_HEIGHT, GRID_OFFSET_X, GRID_OFFSET_Y
+        SCREEN_WIDTH = WINDOW_WIDTH
+        SCREEN_HEIGHT = WINDOW_HEIGHT
         
         # Re-calculate constants that depend on screen size
         MAP_WIDTH = SCREEN_WIDTH - REPORT_PANEL_WIDTH
@@ -213,7 +202,6 @@ class Game:
         GRID_OFFSET_Y = (MAP_HEIGHT - (GRID_SIZE * (CELL_SIZE + 20))) // 2
 
         self.screen = pygame.display.set_mode((SCREEN_WIDTH, SCREEN_HEIGHT))
-        self.fullscreen = True
         
         pygame.display.set_caption("Don't Shoot the Messenger - Strategy Game")
         self.clock = pygame.time.Clock()
@@ -237,12 +225,18 @@ class Game:
         self.camera_start_x = 0
         self.camera_start_y = 0
         
+        # Temporary UI Elements
+        self.floating_messages = [] # List of {'text': str, 'pos': (x,y), 'life': int}
+        self.notifications = []     # List of {'text': str, 'life': int}
+        self.last_pigeon_count = 0  # To detect pigeon returns
+        
         # Report UI State
         self.report_popup_visible = False
         self.report_popup_content = None
         self.sidebar_scroll_offset = 0
         self.popup_scroll_offset = 0
         self.report_boxes = [] # Track areas (rect, report) for click detection
+        self.read_reports = set() # Track IDs of reports that have been viewed
         
         # Map selection
         self.maps_dir = os.path.join(os.path.dirname(__file__), "maps")
@@ -263,18 +257,16 @@ class Game:
         self._rebuild_settings_buttons()
 
     def _rebuild_settings_buttons(self):
-        """Rebuild settings buttons with current map name and fullscreen state."""
+        """Rebuild settings buttons with current map name."""
         button_w, button_h = 200, 50
         map_name = self.available_maps[self.selected_map_index] if self.available_maps else "none"
-        fs_text = "Fullscreen: ON" if self.fullscreen else "Fullscreen: OFF"
         self.settings_buttons = [
             Button(SCREEN_WIDTH//2 - 100, 200, button_w, button_h, "Mode: God", self.font),
             Button(SCREEN_WIDTH//2 - 100, 260, button_w, button_h, "Mode: Fog", self.font),
             Button(SCREEN_WIDTH//2 - 100, 320, button_w, button_h, "Mode: Realistic", self.font),
             Button(SCREEN_WIDTH//2 - 100, 380, button_w, button_h, "Phase: Auto", self.font),
             Button(SCREEN_WIDTH//2 - 100, 440, button_w, button_h, f"Map: {map_name}", self.font),
-            Button(SCREEN_WIDTH//2 - 100, 500, button_w, button_h, fs_text, self.font),
-            Button(SCREEN_WIDTH//2 - 100, 580, button_w, button_h, "Back", self.ui_font)
+            Button(SCREEN_WIDTH//2 - 100, 520, button_w, button_h, "Back", self.ui_font)
         ]
 
     def start_new_game(self):
@@ -437,52 +429,75 @@ class Game:
         pygame.draw.rect(self.screen, GRAY, (0, panel_y, panel_w, BOTTOM_PANEL_HEIGHT))
         pygame.draw.line(self.screen, BLACK, (0, panel_y), (panel_w, panel_y), 2)
         
-        # Section 1: Kingdom Info (Left)
-        info_x = 20
+        # Calculate section widths (4 equal sections)
+        section_w = panel_w // 4
+        
+        # Section 1: Kingdom Info
+        sec1_x = 10
         curr_y = panel_y + 15
-        title_surf = pygame.font.SysFont("Arial", 20, bold=True).render("Kingdom Info", True, BLACK)
-        self.screen.blit(title_surf, (info_x, curr_y))
+        title_surf = pygame.font.SysFont("Arial", 18, bold=True).render("Kingdom Info", True, BLACK)
+        self.screen.blit(title_surf, (sec1_x, curr_y))
         
         mode_text = f"Mode: {self.state.mode}"
-        self.screen.blit(self.font.render(mode_text, True, BLACK), (info_x, curr_y + 30))
+        self.screen.blit(self.font.render(mode_text, True, BLACK), (sec1_x, curr_y + 30))
         
-        turn_text = f"Turn: {'Player (Blue)' if self.state.turn == 0 else 'Enemy (Red)'}"
-        self.screen.blit(self.font.render(turn_text, True, BLUE if self.state.turn == 0 else RED), (info_x, curr_y + 55))
+        turn_text = f"Turn: {'Player' if self.state.turn == 0 else 'Enemy'}"
+        self.screen.blit(self.font.render(turn_text, True, BLUE if self.state.turn == 0 else RED), (sec1_x, curr_y + 55))
         
         turn_count_text = f"Turn #: {self.state.turn_count}"
-        self.screen.blit(self.font.render(turn_count_text, True, BLACK), (info_x, curr_y + 80))
+        self.screen.blit(self.font.render(turn_count_text, True, BLACK), (sec1_x, curr_y + 80))
         
         phase_name = self.state.phases[self.state.current_phase_index]
         phase_surf = self.font.render(f"Phase: {phase_name}", True, PURPLE)
-        self.screen.blit(phase_surf, (info_x, curr_y + 105))
+        self.screen.blit(phase_surf, (sec1_x, curr_y + 105))
         
-        # Section 2: Resources & Pigeons (Center)
-        center_x = panel_w // 3
+        # Divider 1
+        pygame.draw.line(self.screen, BLACK, (section_w, panel_y), (section_w, SCREEN_HEIGHT), 2)
+        
+        # Section 2: Resources
+        sec2_x = section_w + 10
         curr_y = panel_y + 15
-        self.screen.blit(self.font.render("Resources:", True, BLACK), (center_x, curr_y))
+        title_surf = pygame.font.SysFont("Arial", 18, bold=True).render("Resources", True, BLACK)
+        self.screen.blit(title_surf, (sec2_x, curr_y))
+        
         gold = self.state.gold[self.state.turn]
-        self.screen.blit(self.font.render(f"Gold: {gold}", True, BLACK), (center_x + 10, curr_y + 25))
-            
-        pigeon_x = center_x + 150
-        active_pigeons = [p for p in self.state.pigeons if p.owner == self.state.turn]
-        self.screen.blit(self.font.render(f"Pigeons: {len(active_pigeons)}/{self.state.pigeon_limit[self.state.turn]}", True, BLACK), (pigeon_x, curr_y))
+        self.screen.blit(self.font.render(f"Gold: {gold}", True, BLACK), (sec2_x, curr_y + 30))
         
-        for i, p in enumerate(active_pigeons[:4]): # Show up to 4 pigeons in bottom bar
-            status = "Returning" if p.returning else f"Traveling ({p.turns_to_reach}t)"
-            p_info = f"P{i+1}: {p.command['type']} -> {status}"
-            self.screen.blit(self.font.render(p_info, True, DARK_GRAY), (pigeon_x + 10, curr_y + 25 + i * 20))
-            
-        # Section 3: Quick Controls (Right)
-        ctrl_x = (panel_w * 2) // 3
+        # Divider 2
+        pygame.draw.line(self.screen, BLACK, (section_w * 2, panel_y), (section_w * 2, SCREEN_HEIGHT), 2)
+        
+        # Section 3: Available Pigeons
+        sec3_x = section_w * 2 + 10
         curr_y = panel_y + 15
+        title_surf = pygame.font.SysFont("Arial", 18, bold=True).render("Available Pigeons", True, BLACK)
+        self.screen.blit(title_surf, (sec3_x, curr_y))
+        
+        active_pigeons = [p for p in self.state.pigeons if p.owner == self.state.turn]
+        limit = self.state.pigeon_limit[self.state.turn]
+        available = limit - len(active_pigeons)
+        self.screen.blit(self.font.render(f"{available}/{limit}", True, BLACK), (sec3_x, curr_y + 30))
+        
+        for i, p in enumerate(active_pigeons[:3]): # Show up to 3 pigeons
+            status = "Ret" if p.returning else f"Out({p.turns_to_reach}t)"
+            p_info = f"P{i+1}: {status}"
+            self.screen.blit(self.font.render(p_info, True, DARK_GRAY), (sec3_x, curr_y + 55 + i * 20))
+        
+        # Divider 3
+        pygame.draw.line(self.screen, BLACK, (section_w * 3, panel_y), (section_w * 3, SCREEN_HEIGHT), 2)
+        
+        # Section 4: Quick Controls
+        sec4_x = section_w * 3 + 10
+        curr_y = panel_y + 15
+        title_surf = pygame.font.SysFont("Arial", 18, bold=True).render("Quick Controls", True, BLACK)
+        self.screen.blit(title_surf, (sec4_x, curr_y))
+        
         controls = [
-            "R-Click Tile: Issue Order",
+            "R-Click: Order",
             "SPACE: End Turn",
-            "ESC: Main Menu"
+            "ESC: Menu"
         ]
-        self.screen.blit(self.font.render("Quick Controls:", True, BLACK), (ctrl_x, curr_y))
         for i, ctrl in enumerate(controls):
-            self.screen.blit(self.font.render(ctrl, True, BLACK), (ctrl_x + 10, curr_y + 25 + i * 20))
+            self.screen.blit(self.font.render(ctrl, True, BLACK), (sec4_x, curr_y + 30 + i * 25))
 
         # Draw Report Panel (Right)
         sidebar_rect = pygame.Rect(SCREEN_WIDTH - REPORT_PANEL_WIDTH, 0, REPORT_PANEL_WIDTH, SCREEN_HEIGHT)
@@ -511,7 +526,18 @@ class Game:
             
             # Only draw and track if visible (or partially visible) in the clip area
             if box_rect.bottom > content_rect.top and box_rect.top < content_rect.bottom:
-                pygame.draw.rect(self.screen, WHITE, box_rect)
+                # Color code reports: unread reports (bright cyan), read reports (light lavender), dispatch orders (white)
+                report_id = id(report)
+                is_actual_report = 'history' in report and report['history']
+                
+                if is_actual_report:
+                    if report_id not in self.read_reports:
+                        pygame.draw.rect(self.screen, (150, 220, 255), box_rect) # Bright cyan - unread report
+                    else:
+                        pygame.draw.rect(self.screen, (220, 210, 255), box_rect) # Light lavender - read report
+                else:
+                    pygame.draw.rect(self.screen, WHITE, box_rect) # White - dispatch orders
+                
                 pygame.draw.rect(self.screen, BLACK, box_rect, 1)
                 
                 # Highlight if hovered
@@ -522,9 +548,12 @@ class Game:
                 turn_received = report.get('turn_received', '?')
                 summary = f"Turn {turn_received} | Pos: {report['position']}"
                 if report.get('message'):
-                    summary += " | Message"
+                    summary += " | Msg"
                 elif 'history' in report and report['history']:
-                    summary += " | History"
+                    summary += " | Hist"
+                
+                if 'available_turn' in report:
+                    summary += f" | Ret: T{report['available_turn']}"
                 
                 sum_surf = self.font.render(summary, True, BLACK)
                 self.screen.blit(sum_surf, (box_rect.x + 10, box_rect.y + 10))
@@ -542,6 +571,42 @@ class Game:
 
         # Draw context menu on top
         self.context_menu.draw(self.screen)
+
+        # Draw Floating Messages
+        for msg in self.floating_messages[:]:
+            alpha = min(255, msg['life'] * 5)
+            text_surf = self.ui_font.render(msg['text'], True, RED)
+            # Apply alpha
+            s = pygame.Surface(text_surf.get_size(), pygame.SRCALPHA)
+            s.fill((255, 255, 255, alpha))
+            text_surf.blit(s, (0, 0), special_flags=pygame.BLEND_RGBA_MULT)
+            
+            self.screen.blit(text_surf, msg['pos'])
+            msg['pos'] = (msg['pos'][0], msg['pos'][1] - 1)
+            msg['life'] -= 1
+            if msg['life'] <= 0:
+                self.floating_messages.remove(msg)
+
+        # Draw Notifications
+        notif_y = 50
+        for notif in self.notifications[:]:
+            notif_w = 250
+            notif_h = 40
+            notif_rect = pygame.Rect(SCREEN_WIDTH - REPORT_PANEL_WIDTH - notif_w - 20, notif_y, notif_w, notif_h)
+            
+            alpha = min(255, notif['life'] * 5)
+            s = pygame.Surface((notif_w, notif_h), pygame.SRCALPHA)
+            pygame.draw.rect(s, (100, 255, 100, alpha), s.get_rect(), border_radius=5)
+            pygame.draw.rect(s, (0, 0, 0, alpha), s.get_rect(), 2, border_radius=5)
+            
+            text_surf = self.font.render(notif['text'], True, (0, 0, 0, alpha))
+            s.blit(text_surf, (10, 10))
+            
+            self.screen.blit(s, notif_rect)
+            notif_y += notif_h + 10
+            notif['life'] -= 1
+            if notif['life'] <= 0:
+                self.notifications.remove(notif)
 
         if self.state.game_over:
             overlay = pygame.Surface((SCREEN_WIDTH, SCREEN_HEIGHT), pygame.SRCALPHA)
@@ -610,8 +675,6 @@ class Game:
             curr_y += 5
             draw_text(report['message'])
             curr_y += 10
-            if 'available_turn' in report:
-                draw_text(f"Pigeon return turn: {report['available_turn']}", color=DARK_GRAY)
         else:
             draw_text("UNIT STATUS", bold=True)
             curr_y += 5
@@ -663,7 +726,7 @@ class Game:
                 
                 for t in sorted(history_by_turn.keys(), reverse=True):
                     draw_text(f"--- Turn {t} ---", color=DARK_GRAY)
-                    for h in history_by_turn[t]:
+                    for h in reversed(history_by_turn[t]):
                         e_type = h['type']
                         color = EVENT_COLORS.get(e_type, BLACK)
                         draw_text(f"[{e_type.upper()}] {h['details']}", color=color)
@@ -748,40 +811,7 @@ class Game:
                     if self.available_maps:
                         self.selected_map_index = (self.selected_map_index + 1) % len(self.available_maps)
                         self._rebuild_settings_buttons()
-                elif i == 5:
-                    self.toggle_fullscreen()
-                elif i == 6: self.ui_state = UIState.MAIN_MENU
-
-    def toggle_fullscreen(self):
-        self.fullscreen = not self.fullscreen
-        global SCREEN_WIDTH, SCREEN_HEIGHT, MAP_WIDTH, MAP_HEIGHT, GRID_OFFSET_X, GRID_OFFSET_Y
-        
-        if self.fullscreen:
-            SCREEN_WIDTH = DESKTOP_WIDTH
-            SCREEN_HEIGHT = DESKTOP_HEIGHT - 80
-            # Removed NOFRAME to show window decorations (minimize/close buttons)
-            self.screen = pygame.display.set_mode((SCREEN_WIDTH, SCREEN_HEIGHT))
-        else:
-            SCREEN_WIDTH = WINDOW_WIDTH
-            SCREEN_HEIGHT = WINDOW_HEIGHT
-            if 'SDL_VIDEO_WINDOW_POS' in os.environ:
-                del os.environ['SDL_VIDEO_WINDOW_POS']
-            self.screen = pygame.display.set_mode((SCREEN_WIDTH, SCREEN_HEIGHT))
-            
-        # Re-calculate constants for both modes
-        MAP_WIDTH = SCREEN_WIDTH - REPORT_PANEL_WIDTH
-        MAP_HEIGHT = SCREEN_HEIGHT - BOTTOM_PANEL_HEIGHT
-        GRID_OFFSET_X = (MAP_WIDTH - (GRID_SIZE * (CELL_SIZE + 20))) // 2
-        GRID_OFFSET_Y = (MAP_HEIGHT - (GRID_SIZE * (CELL_SIZE + 20))) // 2
-        
-        # Rebuild UI elements for new dimensions
-        button_w, button_h = 200, 50
-        self.menu_buttons = [
-            Button(SCREEN_WIDTH//2 - 100, 300, button_w, button_h, "Start Game", self.ui_font),
-            Button(SCREEN_WIDTH//2 - 100, 370, button_w, button_h, "Settings", self.ui_font),
-            Button(SCREEN_WIDTH//2 - 100, 440, button_w, button_h, "Quit", self.ui_font)
-        ]
-        self._rebuild_settings_buttons()
+                elif i == 5: self.ui_state = UIState.MAIN_MENU
 
     def run(self):
         running = True
@@ -836,6 +866,7 @@ class Game:
                                         if rect.collidepoint(event.pos):
                                             self.report_popup_visible = True
                                             self.report_popup_content = report
+                                            self.read_reports.add(id(report)) # Mark as read
                                             self.popup_scroll_offset = 0
                                             break
                                     continue
@@ -897,6 +928,16 @@ class Game:
                                     if self.state.phases[self.state.current_phase_index] != "Give Orders":
                                         continue
                                     
+                                    # Check pigeon availability
+                                    active_pigeons = [p for p in self.state.pigeons if p.owner == self.state.turn]
+                                    if len(active_pigeons) >= self.state.pigeon_limit[self.state.turn]:
+                                        self.floating_messages.append({
+                                            'text': "No Pigeons Available",
+                                            'pos': event.pos,
+                                            'life': 60
+                                        })
+                                        continue
+
                                     node = self.get_node_at_mouse(event.pos)
                                     if node:
                                         options = []
@@ -943,6 +984,15 @@ class Game:
                                 self.context_menu.hide()
                                 # Reset scroll when turn changes
                                 self.sidebar_scroll_offset = 0
+                                
+                                # Check for returned pigeons
+                                if hasattr(self.state, 'returned_pigeons'):
+                                    for p in self.state.returned_pigeons:
+                                        if p.owner == 0: # Only notify player
+                                            self.notifications.append({
+                                                'text': "A pigeon has returned!",
+                                                'life': 180
+                                            })
                         
                         # Handle mouse button release (stop dragging)
                         if event.type == pygame.MOUSEBUTTONUP:

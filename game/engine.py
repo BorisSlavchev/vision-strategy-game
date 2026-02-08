@@ -132,6 +132,7 @@ class GameState:
         self.pigeon_limit = [1, 1]
         self.turn_count = 1
         self.reports = [[], []]  # Stores list of reports for each player
+        self.returned_pigeons = [] # Track pigeons that just returned this turn
         
         # Phase Management
         self.phases = [
@@ -310,7 +311,7 @@ class GameState:
         else:
             lines.append(f"Task: {cmd_type.title()}")
             
-        lines.append(f"Avail: Turn {self.turn_count + return_time}")
+        # No longer adding Avail: Turn X to the message lines here
         
         report = {
             'position': target_node.name,
@@ -556,12 +557,14 @@ class GameState:
 
     def process_reports_phase(self):
         """Phase 1: Process returning pigeons that have already arrived at the castle"""
+        self.returned_pigeons = []
         for pigeon in self.pigeons[:]:
             if pigeon.owner == self.turn and pigeon.returning:
                 if pigeon.arrived:
                     if pigeon.payload:
                         pigeon.payload['turn_received'] = self.turn_count
                         self.reports[pigeon.owner].append(pigeon.payload)
+                    self.returned_pigeons.append(pigeon)
                     self.pigeons.remove(pigeon)
 
     def process_order_give_receive_phase(self):
