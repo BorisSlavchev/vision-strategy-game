@@ -1,0 +1,170 @@
+{
+    "name": "Arena of Valor",
+    "description": "A tactical 3-lane map inspired by MOBA games. Features a Top, Mid, and Bottom lane with jungle paths connecting them.",
+    "nodes": [
+        {
+            "id": 0,
+            "x": 0,
+            "y": 3,
+            "name": "A",
+            "structure": "Castle",
+            "structure_owner": 0
+        },
+        {
+            "id": 5,
+            "x": 2,
+            "y": 3,
+            "name": "B"
+        },
+        {
+            "id": 6,
+            "x": 4,
+            "y": 3,
+            "name": "C"
+        },
+        {
+            "id": 8,
+            "x": 1,
+            "y": 2,
+            "name": "D"
+        },
+        {
+            "id": 2,
+            "x": 0,
+            "y": 1,
+            "name": "E"
+        },
+        {
+            "id": 9,
+            "x": 2,
+            "y": 1,
+            "name": "F"
+        },
+        {
+            "id": 7,
+            "x": 4,
+            "y": 1,
+            "name": "G"
+        },
+        {
+            "id": 10,
+            "x": 3,
+            "y": 0,
+            "name": "H"
+        },
+        {
+            "id": 3,
+            "x": 0,
+            "y": -1,
+            "name": "I"
+        },
+        {
+            "id": 4,
+            "x": 2,
+            "y": -1,
+            "name": "J"
+        },
+        {
+            "id": 1,
+            "x": 4,
+            "y": -1,
+            "name": "K",
+            "structure": "Castle",
+            "structure_owner": 1
+        }
+    ],
+    "edges": [
+        {
+            "from": 0,
+            "to": 2,
+            "travel_time": 2
+        },
+        {
+            "from": 2,
+            "to": 3,
+            "travel_time": 2
+        },
+        {
+            "from": 3,
+            "to": 4,
+            "travel_time": 2
+        },
+        {
+            "from": 4,
+            "to": 1,
+            "travel_time": 2
+        },
+        {
+            "from": 0,
+            "to": 8,
+            "travel_time": 1
+        },
+        {
+            "from": 8,
+            "to": 9,
+            "travel_time": 1
+        },
+        {
+            "from": 9,
+            "to": 10,
+            "travel_time": 1
+        },
+        {
+            "from": 10,
+            "to": 1,
+            "travel_time": 1
+        },
+        {
+            "from": 0,
+            "to": 5,
+            "travel_time": 2
+        },
+        {
+            "from": 5,
+            "to": 6,
+            "travel_time": 2
+        },
+        {
+            "from": 6,
+            "to": 7,
+            "travel_time": 2
+        },
+        {
+            "from": 7,
+            "to": 1,
+            "travel_time": 2
+        },
+        {
+            "from": 2,
+            "to": 8,
+            "travel_time": 1
+        },
+        {
+            "from": 5,
+            "to": 8,
+            "travel_time": 1
+        },
+        {
+            "from": 4,
+            "to": 10,
+            "travel_time": 1
+        },
+        {
+            "from": 7,
+            "to": 10,
+            "travel_time": 1
+        },
+        {
+            "from": 3,
+            "to": 9,
+            "travel_time": 2
+        },
+        {
+            "from": 9,
+            "to": 6,
+            "travel_time": 2
+        }
+    ],
+    "player_castle": 0,
+    "enemy_castle": 1
+}
