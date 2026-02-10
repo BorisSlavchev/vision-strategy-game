@@ -216,6 +216,14 @@ class Game:
         self.mode_options = ["God", "Fog", "Realistic"]
         self.context_menu = ContextMenu(self.font)
         
+        # AI Settings
+        self.ai_types = ["Balanced", "Aggressive", "Defensive"]
+        self.selected_ai_index = 0
+        
+        # AI Thinking Animation
+        self.ai_thinking = False
+        self.ai_think_timer = 0
+        
         # Camera/Viewport panning
         self.camera_x = 0
         self.camera_y = 0
@@ -242,7 +250,9 @@ class Game:
         self.maps_dir = os.path.join(os.path.dirname(__file__), "maps")
         self.available_maps = get_available_maps(self.maps_dir)
         self.selected_map_index = 0
-        if "default_3x3" in self.available_maps:
+        if "moba" in self.available_maps:
+            self.selected_map_index = self.available_maps.index("moba")
+        elif "default_3x3" in self.available_maps:
             self.selected_map_index = self.available_maps.index("default_3x3")
         
         # UI Elements for Main Menu
@@ -257,26 +267,29 @@ class Game:
         self._rebuild_settings_buttons()
 
     def _rebuild_settings_buttons(self):
-        """Rebuild settings buttons with current map name."""
+        """Rebuild settings buttons with current map and AI type."""
         button_w, button_h = 200, 50
         map_name = self.available_maps[self.selected_map_index] if self.available_maps else "none"
+        ai_type = self.ai_types[self.selected_ai_index]
         self.settings_buttons = [
-            Button(SCREEN_WIDTH//2 - 100, 200, button_w, button_h, "Mode: God", self.font),
-            Button(SCREEN_WIDTH//2 - 100, 260, button_w, button_h, "Mode: Fog", self.font),
-            Button(SCREEN_WIDTH//2 - 100, 320, button_w, button_h, "Mode: Realistic", self.font),
-            Button(SCREEN_WIDTH//2 - 100, 380, button_w, button_h, "Phase: Auto", self.font),
-            Button(SCREEN_WIDTH//2 - 100, 440, button_w, button_h, f"Map: {map_name}", self.font),
-            Button(SCREEN_WIDTH//2 - 100, 520, button_w, button_h, "Back", self.ui_font)
+            Button(SCREEN_WIDTH//2 - 100, 240, button_w, button_h, f"Mode: {self.selected_mode}", self.font),
+            Button(SCREEN_WIDTH//2 - 100, 300, button_w, button_h, f"AI: {ai_type}", self.font),
+            Button(SCREEN_WIDTH//2 - 100, 360, button_w, button_h, f"Map: {map_name}", self.font),
+            Button(SCREEN_WIDTH//2 - 100, 440, button_w, button_h, "Back", self.ui_font)
         ]
 
     def start_new_game(self):
         map_name = self.available_maps[self.selected_map_index] if self.available_maps else "default_3x3"
-        self.state = GameState(mode=self.selected_mode, automated_phases=self.automated_phases, map_name=map_name)
+        ai_type = self.ai_types[self.selected_ai_index]
+        self.state = GameState(mode=self.selected_mode, automated_phases=self.automated_phases, map_name=map_name, ai_type=ai_type)
         self.ui_state = UIState.PLAYING
         # Reset camera for new game
         self.camera_x = 0
         self.camera_y = 0
         self.is_dragging = False
+        # Reset AI thinking state
+        self.ai_thinking = False
+        self.ai_think_timer = 0
 
     def update_unit_panel(self):
         pass  # Method removed as per plan
@@ -339,7 +352,7 @@ class Game:
         if self.state.game_over:
             player_visibility = set(self.state.nodes)  # All nodes visible
         else:
-            player_visibility = self.state.visible_nodes[self.state.turn]
+            player_visibility = self.state.visible_nodes[0]  # Always show player's visibility
 
         # Draw connections with travel time labels (Always Visible)
         drawn_edges = set()  # Track drawn edges to avoid duplicates
@@ -441,15 +454,16 @@ class Game:
         mode_text = f"Mode: {self.state.mode}"
         self.screen.blit(self.font.render(mode_text, True, BLACK), (sec1_x, curr_y + 30))
         
-        turn_text = f"Turn: {'Player' if self.state.turn == 0 else 'Enemy'}"
-        self.screen.blit(self.font.render(turn_text, True, BLUE if self.state.turn == 0 else RED), (sec1_x, curr_y + 55))
+        turn_text = "Your Turn"
+        self.screen.blit(self.font.render(turn_text, True, BLUE), (sec1_x, curr_y + 55))
         
         turn_count_text = f"Turn #: {self.state.turn_count}"
         self.screen.blit(self.font.render(turn_count_text, True, BLACK), (sec1_x, curr_y + 80))
         
-        phase_name = self.state.phases[self.state.current_phase_index]
-        phase_surf = self.font.render(f"Phase: {phase_name}", True, PURPLE)
-        self.screen.blit(phase_surf, (sec1_x, curr_y + 105))
+        ai_type_text = f"AI: {self.state.ai_type}"
+        self.screen.blit(self.font.render(ai_type_text, True, RED), (sec1_x, curr_y + 105))
+        
+
         
         # Divider 1
         pygame.draw.line(self.screen, BLACK, (section_w, panel_y), (section_w, SCREEN_HEIGHT), 2)
@@ -460,7 +474,7 @@ class Game:
         title_surf = pygame.font.SysFont("Arial", 18, bold=True).render("Resources", True, BLACK)
         self.screen.blit(title_surf, (sec2_x, curr_y))
         
-        gold = self.state.gold[self.state.turn]
+        gold = self.state.gold[0]
         self.screen.blit(self.font.render(f"Gold: {gold}", True, BLACK), (sec2_x, curr_y + 30))
         
         # Divider 2
@@ -472,8 +486,8 @@ class Game:
         title_surf = pygame.font.SysFont("Arial", 18, bold=True).render("Available Pigeons", True, BLACK)
         self.screen.blit(title_surf, (sec3_x, curr_y))
         
-        active_pigeons = [p for p in self.state.pigeons if p.owner == self.state.turn]
-        limit = self.state.pigeon_limit[self.state.turn]
+        active_pigeons = [p for p in self.state.pigeons if p.owner == 0]
+        limit = self.state.pigeon_limit[0]
         available = limit - len(active_pigeons)
         self.screen.blit(self.font.render(f"{available}/{limit}", True, BLACK), (sec3_x, curr_y + 30))
         
@@ -504,12 +518,12 @@ class Game:
         pygame.draw.rect(self.screen, GRAY, sidebar_rect)
         pygame.draw.line(self.screen, BLACK, (SCREEN_WIDTH - REPORT_PANEL_WIDTH, 0), (SCREEN_WIDTH - REPORT_PANEL_WIDTH, SCREEN_HEIGHT), 2)
         
-        report_header = f"{'Player' if self.state.turn == 0 else 'Enemy'} Reports"
+        report_header = "Reports"
         header_surf = self.ui_font.render(report_header, True, BLACK)
         self.screen.blit(header_surf, (SCREEN_WIDTH - REPORT_PANEL_WIDTH + 10, 10))
         
-        # Draw accumulated reports for current player with clipping and scrolling
-        current_reports = self.state.reports[self.state.turn]
+        # Draw accumulated reports for player
+        current_reports = self.state.reports[0]
         
         # Define sidebar content area for clipping
         content_rect = pygame.Rect(SCREEN_WIDTH - REPORT_PANEL_WIDTH, 50, REPORT_PANEL_WIDTH, SCREEN_HEIGHT - 50)
@@ -608,12 +622,21 @@ class Game:
             if notif['life'] <= 0:
                 self.notifications.remove(notif)
 
+        # Draw AI thinking overlay
+        if self.ai_thinking:
+            overlay = pygame.Surface((SCREEN_WIDTH, SCREEN_HEIGHT), pygame.SRCALPHA)
+            overlay.fill((0, 0, 0, 120))
+            self.screen.blit(overlay, (0, 0))
+            think_text = self.ui_font.render("AI is thinking...", True, YELLOW)
+            text_rect = think_text.get_rect(center=(MAP_WIDTH // 2, MAP_HEIGHT // 2))
+            self.screen.blit(think_text, text_rect)
+
         if self.state.game_over:
             overlay = pygame.Surface((SCREEN_WIDTH, SCREEN_HEIGHT), pygame.SRCALPHA)
             overlay.fill((0, 0, 0, 180))
             self.screen.blit(overlay, (0,0))
-            winner_text = f"GAME OVER! Winner: {'Player' if self.state.winner == 0 else 'Enemy'}"
-            text_surf = self.ui_font.render(winner_text, True, GREEN)
+            winner_text = f"GAME OVER! {'Victory!' if self.state.winner == 0 else 'Defeat!'}"
+            text_surf = self.ui_font.render(winner_text, True, GREEN if self.state.winner == 0 else RED)
             self.screen.blit(text_surf, (SCREEN_WIDTH//2 - 150, SCREEN_HEIGHT//2))
 
 
@@ -778,7 +801,8 @@ class Game:
         title_rect = title_surf.get_rect(center=(SCREEN_WIDTH//2, 100))
         self.screen.blit(title_surf, title_rect)
         
-        mode_info = f"Current Mode: {self.selected_mode} | Auto-Phase: {'ON' if self.automated_phases else 'OFF'}"
+        ai_type = self.ai_types[self.selected_ai_index]
+        mode_info = f"Current Mode: {self.selected_mode} | AI: {ai_type}"
         info_surf = self.ui_font.render(mode_info, True, YELLOW)
         info_rect = info_surf.get_rect(center=(SCREEN_WIDTH//2, 180))
         self.screen.blit(info_surf, info_rect)
@@ -800,18 +824,22 @@ class Game:
     def handle_settings_events(self, event):
         for i, btn in enumerate(self.settings_buttons):
             if btn.handle_event(event):
-                if i == 0: self.selected_mode = "God"
-                elif i == 1: self.selected_mode = "Fog"
-                elif i == 2: self.selected_mode = "Realistic"
-                elif i == 3:
-                    self.automated_phases = not self.automated_phases
-                    self.settings_buttons[3].text = f"Phase: {'Auto' if self.automated_phases else 'Manual'}"
-                elif i == 4:
+                if i == 0:
+                    # Cycle through Game Modes
+                    curr_idx = self.mode_options.index(self.selected_mode)
+                    self.selected_mode = self.mode_options[(curr_idx + 1) % len(self.mode_options)]
+                    self._rebuild_settings_buttons()
+                elif i == 1:
+                    # Cycle through AI types
+                    self.selected_ai_index = (self.selected_ai_index + 1) % len(self.ai_types)
+                    self._rebuild_settings_buttons()
+                elif i == 2:
                     # Cycle through available maps
                     if self.available_maps:
                         self.selected_map_index = (self.selected_map_index + 1) % len(self.available_maps)
                         self._rebuild_settings_buttons()
-                elif i == 5: self.ui_state = UIState.MAIN_MENU
+                elif i == 3:
+                    self.ui_state = UIState.MAIN_MENU
 
     def run(self):
         running = True
@@ -846,7 +874,7 @@ class Game:
                                             # Trigger the move action
                                             cmd = opt["command"]
                                             data = opt["data"]
-                                            self.state.send_pigeon_to_tile(self.state.turn, data[0], cmd, data[1], count=val)
+                                            self.state.send_pigeon_to_tile(0, data[0], cmd, data[1], count=val)
                                             self.context_menu.hide()
                                             break
 
@@ -901,13 +929,13 @@ class Game:
 
                                         data = menu_result.get("data")
                                         if cmd == "recruit":
-                                            self.state.recruit_unit(self.state.turn)
+                                            self.state.recruit_unit(0)
                                         elif cmd == "report":
-                                            self.state.send_pigeon_to_tile(self.state.turn, data, "report", None)
+                                            self.state.send_pigeon_to_tile(0, data, "report", None)
                                         elif cmd == "move_attack":
                                             source_node, target_node = data
                                             count = menu_result.get("amount")
-                                            self.state.send_pigeon_to_tile(self.state.turn, source_node, "move_attack", target_node, count=count)
+                                            self.state.send_pigeon_to_tile(0, source_node, "move_attack", target_node, count=count)
                                 elif in_map_area:
                                     # Start drag for panning
                                     self.is_dragging = True
@@ -929,8 +957,8 @@ class Game:
                                         continue
                                     
                                     # Check pigeon availability
-                                    active_pigeons = [p for p in self.state.pigeons if p.owner == self.state.turn]
-                                    if len(active_pigeons) >= self.state.pigeon_limit[self.state.turn]:
+                                    active_pigeons = [p for p in self.state.pigeons if p.owner == 0]
+                                    if len(active_pigeons) >= self.state.pigeon_limit[0]:
                                         self.floating_messages.append({
                                             'text': "No Pigeons Available",
                                             'pos': event.pos,
@@ -954,7 +982,7 @@ class Game:
                                             })
                                         
                                         # Recruitment if at castle (This is static info, so it's fine to show)
-                                        castle = self.state.player_castle_node if self.state.turn == 0 else self.state.enemy_castle_node
+                                        castle = self.state.player_castle_node
                                         if node == castle:
                                             options.append({"label": "Recruit Soldier (10G)", "command": "recruit", "data": node})
                                         
@@ -979,11 +1007,16 @@ class Game:
                                     self.sidebar_scroll_offset = max(0, self.sidebar_scroll_offset + scroll_dir * 30)
 
                         if event.type == pygame.KEYDOWN:
-                            if event.key == pygame.K_SPACE:
+                            if event.key == pygame.K_SPACE and not self.ai_thinking:
                                 self.state.end_turn()
                                 self.context_menu.hide()
                                 # Reset scroll when turn changes
                                 self.sidebar_scroll_offset = 0
+                                
+                                # Start AI thinking animation
+                                if not self.state.game_over:
+                                    self.ai_thinking = True
+                                    self.ai_think_timer = 30  # ~0.5 seconds at 60fps
                                 
                                 # Check for returned pigeons
                                 if hasattr(self.state, 'returned_pigeons'):
@@ -1006,6 +1039,12 @@ class Game:
                                 dy = event.pos[1] - self.drag_start_y
                                 self.camera_x = self.camera_start_x + dx
                                 self.camera_y = self.camera_start_y + dy
+
+            # Tick down AI thinking timer
+            if self.ai_thinking:
+                self.ai_think_timer -= 1
+                if self.ai_think_timer <= 0:
+                    self.ai_thinking = False
 
             self.draw()
             self.clock.tick(60)

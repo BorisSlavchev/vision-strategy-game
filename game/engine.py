@@ -4,6 +4,7 @@ import random
 from collections import deque
 from .graph import create_grid, create_map_from_json
 from .pigeon import Pigeon
+from .ai import create_ai
 
 class Unit:
     def __init__(self, owner, unit_type, node, count=10):
@@ -105,9 +106,13 @@ class Unit:
             self.last_observed[neighbor.id] = observations[neighbor.id]
 
 class GameState:
-    def __init__(self, mode="God", automated_phases=True, map_name="default_3x3"):
+    def __init__(self, mode="God", automated_phases=True, map_name="moba", ai_type="Balanced"):
         self.automated_phases = automated_phases
         self.map_name = map_name
+        
+        # AI Controller
+        self.ai_controller = create_ai(ai_type)
+        self.ai_type = ai_type
         
         # Load map from JSON
         maps_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), "maps")
@@ -126,12 +131,12 @@ class GameState:
             self.enemy_castle_node.structure_owner = 1
         
         self.units = []
-        self.turn = 0  # 0 for player, 1 for enemy
+        self.turn = 0  # 0 for player, 1 for AI (used internally during phase processing)
         self.gold = [20, 20]
         self.pigeons = []
         self.pigeon_limit = [1, 1]
         self.turn_count = 1
-        self.reports = [[], []]  # Stores list of reports for each player
+        self.reports = [[], []]  # Reports only used for player (index 0)
         self.returned_pigeons = [] # Track pigeons that just returned this turn
         
         # Phase Management
@@ -292,6 +297,10 @@ class GameState:
 
     def create_dispatch_report(self, player_id, pigeon, target_node):
         """Creates an instant mini-report when a pigeon is dispatched."""
+        # Skip report generation for AI
+        if player_id == 1:
+            return
+        
         # Even with distance 0, a pigeon takes at least 1 turn to deliver and 1 to return
         # due to the phase-based movement (update in Phase 4, deliver/return in Phase 3).
         effective_dist = max(1, pigeon.turns_to_reach)
@@ -311,8 +320,6 @@ class GameState:
         else:
             lines.append(f"Task: {cmd_type.title()}")
             
-        # No longer adding Avail: Turn X to the message lines here
-        
         report = {
             'position': target_node.name,
             'turn_sent': self.turn_count,
@@ -561,7 +568,8 @@ class GameState:
         for pigeon in self.pigeons[:]:
             if pigeon.owner == self.turn and pigeon.returning:
                 if pigeon.arrived:
-                    if pigeon.payload:
+                    # Only generate reports for player, skip for AI
+                    if pigeon.owner == 0 and pigeon.payload:
                         pigeon.payload['turn_received'] = self.turn_count
                         self.reports[pigeon.owner].append(pigeon.payload)
                     self.returned_pigeons.append(pigeon)
@@ -641,30 +649,28 @@ class GameState:
                         self.finalize_move_attack(unit)
 
     def process_end_of_turn(self):
-        """Phase 6: Resource generation and turn transition"""
-        # Base income
-        self.gold[0] += 5
-        self.gold[1] += 5
+        """Phase 6: Resource generation and end-of-side processing"""
+        # Base income (both sides get income once per full turn)
+        if self.turn == 0:
+            self.gold[0] += 5
+            self.gold[1] += 5
 
-        # All units passively observe their surroundings before turn ends
-        for unit in self.units:
-            if unit.owner == self.turn:
-                unit.observe_surroundings(self)
+        # Only player units passively observe (AI has full vision)
+        if self.turn == 0:
+            for unit in self.units:
+                if unit.owner == 0:
+                    unit.observe_surroundings(self)
 
         # Merge units to clean up map
         self.merge_units()
 
         # Reset movement
         for unit in self.units:
-            unit.has_moved = False
+            if unit.owner == self.turn:
+                unit.has_moved = False
 
-        self.turn = 1 - self.turn
-        if self.turn == 0:
-            self.turn_count += 1
-        
-        self.update_visibility()
-        
-        # Check win condition
+    def _check_win_condition(self):
+        """Check if the game has been won by either side."""
         p1_at_enemy_castle = [u for u in self.get_units_at(self.enemy_castle_node) if u.owner == 0]
         p2_at_player_castle = [u for u in self.get_units_at(self.player_castle_node) if u.owner == 1]
         
@@ -683,18 +689,52 @@ class GameState:
         elif not player_units and self.gold[0] < 10 and self.turn_count > 10:
             self.game_over = True
             self.winner = 1
-        
-        # Reset phase for next player (they start at phase 0: Information)
-        self.current_phase_index = 0
-        self.process_reports_phase() # Process reports immediately for the new current player
+
+    def _process_side_phases(self):
+        """Process all phases from current position through End of Turn for self.turn side."""
+        while True:
+            self.advance_phase()
+            if self.current_phase_index == 0:
+                # Wrapped around — end of turn phase was processed
+                break
 
     def end_turn(self):
-        """Advances through phases. If automated_phases is True, loops until 'Give Orders'."""
-        if self.automated_phases:
-            while True:
-                self.advance_phase()
-                if self.phases[self.current_phase_index] == "Give Orders":
-                    break
-        else:
-            self.advance_phase()
+        """Process both player and AI turns. Called when player presses SPACE."""
+        # --- Player's remaining phases ---
+        self.turn = 0
+        self._process_side_phases()
+        
+        if self.game_over:
+            return
+
+        # --- AI's full turn ---
+        self.turn = 1
+        self.current_phase_index = 0
+        
+        # Process reports phase first to clear returned pigeons
+        self.process_reports_phase()
+        
+        # AI decides actions ("Give Orders" equivalent)
+        self.ai_controller.take_turn(self)
+        
+        # Process AI's remaining phases (Order Give/Receive through End of Turn)
+        self._process_side_phases()
+        
+        # --- Advance to next turn ---
+        self.turn_count += 1
+        self.turn = 0
+        
+        # Check win condition after both sides have acted
+        self._check_win_condition()
+        
+        if self.game_over:
+            return
+        
+        # Update visibility for the player's new turn
+        self.update_visibility()
+        
+        # Start player's new turn at phase 0
+        self.current_phase_index = 0
+        self.process_reports_phase()
+        self.advance_phase()  # Move to "Give Orders"
 
