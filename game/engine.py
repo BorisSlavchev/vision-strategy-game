@@ -340,6 +340,21 @@ class GameState:
         a_total = sum(u.count for u in attackers)
         d_total = sum(u.count for u in defenders)
         
+        # Calculate overcrowding ratios
+        # Any soldier from a stack > 100 suffers disadvantage (2d6 take lower)
+        a_penalty_count = sum(u.count for u in attackers if u.count > 100)
+        d_penalty_count = sum(u.count for u in defenders if u.count > 100)
+        
+        # Probabilistic ratios for the totals
+        a_ratio = a_penalty_count / a_total if a_total > 0 else 0
+        d_ratio = d_penalty_count / d_total if d_total > 0 else 0
+
+        def get_combat_roll(ratio):
+            if random.random() < ratio:
+                # Overcrowding penalty: disadvantage (roll 2d6, take lower)
+                return min(random.randint(1, 6), random.randint(1, 6))
+            return random.randint(1, 6)
+
         while a_total > 0 and d_total > 0:
             a_ready = a_total
             d_ready = d_total
@@ -352,8 +367,8 @@ class GameState:
             d_ready -= num_duels
             
             for _ in range(num_duels):
-                r_a = random.randint(1, 6)
-                r_d = random.randint(1, 6)
+                r_a = get_combat_roll(a_ratio)
+                r_d = get_combat_roll(d_ratio)
                 if r_a > r_d: # Attacker wins
                     a_survivors += 1
                 elif r_d > r_a: # Defender wins
@@ -368,8 +383,8 @@ class GameState:
                 a_ready -= num_extra
                 d_temp_survivors = 0
                 for _ in range(num_extra):
-                    r_a = random.randint(1, 6)
-                    r_d = random.randint(1, 6)
+                    r_a = get_combat_roll(a_ratio)
+                    r_d = get_combat_roll(d_ratio)
                     if r_a > r_d: a_survivors += 1 # D survivor died
                     elif r_d > r_a: d_temp_survivors += 1 # A died
                     else: a_survivors += 1; d_temp_survivors += 1
@@ -381,8 +396,8 @@ class GameState:
                 d_ready -= num_extra
                 a_temp_survivors = 0
                 for _ in range(num_extra):
-                    r_a = random.randint(1, 6)
-                    r_d = random.randint(1, 6)
+                    r_a = get_combat_roll(a_ratio)
+                    r_d = get_combat_roll(d_ratio)
                     if r_d > r_a: d_survivors += 1 # A survivor died
                     elif r_a > r_d: a_temp_survivors += 1 # D died
                     else: d_survivors += 1; a_temp_survivors += 1
@@ -653,7 +668,7 @@ class GameState:
         # Base income (both sides get income once per full turn)
         if self.turn == 0:
             self.gold[0] += 5
-            self.gold[1] += 5
+            self.gold[1] += 3 # AI generates 3 gold instead of 5
 
         # Only player units passively observe (AI has full vision)
         if self.turn == 0:
