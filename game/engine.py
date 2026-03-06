@@ -349,11 +349,11 @@ class GameState:
         a_ratio = a_penalty_count / a_total if a_total > 0 else 0
         d_ratio = d_penalty_count / d_total if d_total > 0 else 0
 
-        def get_combat_roll(ratio):
+        def get_combat_roll(ratio, sides):
             if random.random() < ratio:
-                # Overcrowding penalty: disadvantage (roll 2d6, take lower)
-                return min(random.randint(1, 6), random.randint(1, 6))
-            return random.randint(1, 6)
+                # Overcrowding penalty: disadvantage (roll 2 dice, take lower)
+                return min(random.randint(1, sides), random.randint(1, sides))
+            return random.randint(1, sides)
 
         while a_total > 0 and d_total > 0:
             a_ready = a_total
@@ -367,8 +367,8 @@ class GameState:
             d_ready -= num_duels
             
             for _ in range(num_duels):
-                r_a = get_combat_roll(a_ratio)
-                r_d = get_combat_roll(d_ratio)
+                r_a = get_combat_roll(a_ratio, 9)
+                r_d = get_combat_roll(d_ratio, 10)
                 if r_a > r_d: # Attacker wins
                     a_survivors += 1
                 elif r_d > r_a: # Defender wins
@@ -383,8 +383,8 @@ class GameState:
                 a_ready -= num_extra
                 d_temp_survivors = 0
                 for _ in range(num_extra):
-                    r_a = get_combat_roll(a_ratio)
-                    r_d = get_combat_roll(d_ratio)
+                    r_a = get_combat_roll(a_ratio, 9)
+                    r_d = get_combat_roll(d_ratio, 10)
                     if r_a > r_d: a_survivors += 1 # D survivor died
                     elif r_d > r_a: d_temp_survivors += 1 # A died
                     else: a_survivors += 1; d_temp_survivors += 1
@@ -396,8 +396,8 @@ class GameState:
                 d_ready -= num_extra
                 a_temp_survivors = 0
                 for _ in range(num_extra):
-                    r_a = get_combat_roll(a_ratio)
-                    r_d = get_combat_roll(d_ratio)
+                    r_a = get_combat_roll(a_ratio, 9)
+                    r_d = get_combat_roll(d_ratio, 10)
                     if r_d > r_a: d_survivors += 1 # A survivor died
                     elif r_a > r_d: a_temp_survivors += 1 # D died
                     else: d_survivors += 1; a_temp_survivors += 1
@@ -669,6 +669,12 @@ class GameState:
         if self.turn == 0:
             self.gold[0] += 5
             self.gold[1] += 3 # AI generates 3 gold instead of 5
+            
+            # Gold from occupied unique tiles
+            p0_tiles = {u.node for u in self.units if u.owner == 0}
+            p1_tiles = {u.node for u in self.units if u.owner == 1}
+            self.gold[0] += len(p0_tiles)
+            self.gold[1] += len(p1_tiles)
 
         # Only player units passively observe (AI has full vision)
         if self.turn == 0:
