@@ -1,6 +1,7 @@
 import os
 import sys
 import warnings
+import math
 
 # Suppress pygame startup messages and AVX2 warnings
 os.environ['PYGAME_HIDE_SUPPORT_PROMPT'] = 'hide'
@@ -38,6 +39,7 @@ class UIState(Enum):
     GAMEOVER = 4
 
 from game.ui_components import Button, TextInput
+from game.audio_recorder import AudioRecorder
 
 # Colors
 WHITE = (255, 255, 255)
@@ -216,6 +218,10 @@ class Game:
         self.mode_options = ["God", "Fog", "Realistic"]
         self.context_menu = ContextMenu(self.font)
         
+        # Audio Recording
+        self.audio_recorder = AudioRecorder()
+        self.voice_recording_enabled = False
+        
         # AI Settings
         self.ai_types = ["Balanced", "Aggressive", "Defensive"]
         self.selected_ai_index = 0
@@ -267,15 +273,17 @@ class Game:
         self._rebuild_settings_buttons()
 
     def _rebuild_settings_buttons(self):
-        """Rebuild settings buttons with current map and AI type."""
+        """Rebuild settings buttons with current map, AI type, and recording setting."""
         button_w, button_h = 200, 50
         map_name = self.available_maps[self.selected_map_index] if self.available_maps else "none"
         ai_type = self.ai_types[self.selected_ai_index]
+        rec_status = "On" if getattr(self, 'voice_recording_enabled', False) else "Off"
         self.settings_buttons = [
-            Button(SCREEN_WIDTH//2 - 100, 240, button_w, button_h, f"Mode: {self.selected_mode}", self.font),
-            Button(SCREEN_WIDTH//2 - 100, 300, button_w, button_h, f"AI: {ai_type}", self.font),
-            Button(SCREEN_WIDTH//2 - 100, 360, button_w, button_h, f"Map: {map_name}", self.font),
-            Button(SCREEN_WIDTH//2 - 100, 440, button_w, button_h, "Back", self.ui_font)
+            Button(SCREEN_WIDTH//2 - 100, 200, button_w, button_h, f"Mode: {self.selected_mode}", self.font),
+            Button(SCREEN_WIDTH//2 - 100, 260, button_w, button_h, f"AI: {ai_type}", self.font),
+            Button(SCREEN_WIDTH//2 - 100, 320, button_w, button_h, f"Map: {map_name}", self.font),
+            Button(SCREEN_WIDTH//2 - 100, 380, button_w, button_h, f"Voice Rec: {rec_status}", self.font),
+            Button(SCREEN_WIDTH//2 - 100, 460, button_w, button_h, "Back", self.ui_font)
         ]
 
     def start_new_game(self):
@@ -290,6 +298,12 @@ class Game:
         # Reset AI thinking state
         self.ai_thinking = False
         self.ai_think_timer = 0
+        
+        # Initialize and start continuous recording session
+        self.audio_recorder.enabled = self.voice_recording_enabled
+        self.audio_recorder.init_session()
+        self.audio_recorder.start_recording()
+        self.audio_recorder.mark_turn(self.state.turn_count)
 
     def update_unit_panel(self):
         pass  # Method removed as per plan
@@ -463,8 +477,14 @@ class Game:
         ai_type_text = f"AI: {self.state.ai_type}"
         self.screen.blit(self.font.render(ai_type_text, True, RED), (sec1_x, curr_y + 105))
         
-
-        
+        if self.audio_recorder.is_recording:
+            # Pulsing red circle indicating recording
+            radius = 6
+            pulse = int(50 * (1 + math.sin(pygame.time.get_ticks() / 150))) # 0 to 100
+            rec_color = (255, 100 + pulse, 100 + pulse)
+            pygame.draw.circle(self.screen, rec_color, (sec1_x + 10, curr_y + 130), radius)
+            self.screen.blit(self.font.render("REC", True, rec_color), (sec1_x + 20, curr_y + 120))
+            
         # Divider 1
         pygame.draw.line(self.screen, BLACK, (section_w, panel_y), (section_w, SCREEN_HEIGHT), 2)
         
@@ -810,7 +830,7 @@ class Game:
         for btn in self.settings_buttons:
             btn.draw(self.screen)
 
-    def handle_menu_events(self, event):
+    def handle_menu_events(self, event, running_ref):
         for i, btn in enumerate(self.menu_buttons):
             if btn.handle_event(event):
                 if i == 0: # Start
@@ -818,8 +838,7 @@ class Game:
                 elif i == 1: # Settings
                     self.ui_state = UIState.SETTINGS
                 elif i == 2: # Quit
-                    pygame.quit()
-                    sys.exit()
+                    running_ref[0] = False
 
     def handle_settings_events(self, event):
         for i, btn in enumerate(self.settings_buttons):
@@ -839,25 +858,31 @@ class Game:
                         self.selected_map_index = (self.selected_map_index + 1) % len(self.available_maps)
                         self._rebuild_settings_buttons()
                 elif i == 3:
+                    # Toggle Voice Rec
+                    self.voice_recording_enabled = not getattr(self, 'voice_recording_enabled', False)
+                    self._rebuild_settings_buttons()
+                elif i == 4:
+                    self.audio_recorder.stop_recording()
                     self.ui_state = UIState.MAIN_MENU
 
     def run(self):
-        running = True
-        while running:
+        running_ref = [True]
+        while running_ref[0]:
             for event in pygame.event.get():
                 if event.type == pygame.QUIT:
-                    running = False
+                    running_ref[0] = False
                 
                 if event.type == pygame.KEYDOWN:
                     if event.key == pygame.K_ESCAPE:
                         if self.report_popup_visible:
                             self.report_popup_visible = False
                         else:
+                            self.audio_recorder.stop_recording()
                             self.ui_state = UIState.MAIN_MENU
                         continue
 
                 if self.ui_state == UIState.MAIN_MENU:
-                    self.handle_menu_events(event)
+                    self.handle_menu_events(event, running_ref)
                 elif self.ui_state == UIState.SETTINGS:
                     self.handle_settings_events(event)
                 if self.ui_state == UIState.PLAYING:
@@ -1017,6 +1042,9 @@ class Game:
                                 if not self.state.game_over:
                                     self.ai_thinking = True
                                     self.ai_think_timer = 30  # ~0.5 seconds at 60fps
+                                    
+                                # Mark the new turn in the audio recording
+                                self.audio_recorder.mark_turn(self.state.turn_count)
                                 
                                 # Check for returned pigeons
                                 if hasattr(self.state, 'returned_pigeons'):
@@ -1049,6 +1077,7 @@ class Game:
             self.draw()
             self.clock.tick(60)
 
+        self.audio_recorder.stop_recording()
         pygame.quit()
         sys.exit()
 
