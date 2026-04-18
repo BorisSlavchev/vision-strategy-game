@@ -223,7 +223,7 @@ class Game:
         self.voice_recording_enabled = False
         
         # AI Settings
-        self.ai_types = ["Balanced", "Aggressive", "Defensive"]
+        self.ai_types = ["Aggressive", "Conservative"]
         self.selected_ai_index = 0
         
         # AI Thinking Animation
@@ -494,8 +494,7 @@ class Game:
         title_surf = pygame.font.SysFont("Arial", 18, bold=True).render("Resources", True, BLACK)
         self.screen.blit(title_surf, (sec2_x, curr_y))
         
-        gold = self.state.gold[0]
-        self.screen.blit(self.font.render(f"Gold: {gold}", True, BLACK), (sec2_x, curr_y + 30))
+        self.screen.blit(self.font.render("No Resources", True, DARK_GRAY), (sec2_x, curr_y + 30))
         
         # Divider 2
         pygame.draw.line(self.screen, BLACK, (section_w * 2, panel_y), (section_w * 2, SCREEN_HEIGHT), 2)
@@ -872,14 +871,15 @@ class Game:
                 if event.type == pygame.QUIT:
                     running_ref[0] = False
                 
-                if event.type == pygame.KEYDOWN:
-                    if event.key == pygame.K_ESCAPE:
-                        if self.report_popup_visible:
-                            self.report_popup_visible = False
-                        else:
-                            self.audio_recorder.stop_recording()
-                            self.ui_state = UIState.MAIN_MENU
-                        continue
+                keys = pygame.key.get_pressed()
+                if keys[pygame.K_a] and keys[pygame.K_o] and keys[pygame.K_p]:
+                    if self.report_popup_visible:
+                        self.report_popup_visible = False
+                        pygame.time.delay(200) # Simple debounce
+                    else:
+                        self.audio_recorder.stop_recording()
+                        self.ui_state = UIState.MAIN_MENU
+                        pygame.time.delay(200) # Simple debounce
 
                 if self.ui_state == UIState.MAIN_MENU:
                     self.handle_menu_events(event, running_ref)
@@ -953,9 +953,7 @@ class Game:
                                             continue
 
                                         data = menu_result.get("data")
-                                        if cmd == "recruit":
-                                            self.state.recruit_unit(0)
-                                        elif cmd == "report":
+                                        if cmd == "report":
                                             self.state.send_pigeon_to_tile(0, data, "report", None)
                                         elif cmd == "move_attack":
                                             source_node, target_node = data
@@ -1006,10 +1004,7 @@ class Game:
                                                 "data": (node, neighbor)
                                             })
                                         
-                                        # Recruitment if at castle (This is static info, so it's fine to show)
                                         castle = self.state.player_castle_node
-                                        if node == castle:
-                                            options.append({"label": "Recruit Soldier (10G)", "command": "recruit", "data": node})
                                         
                                         if options:
                                             self.context_menu.show(event.pos, options, node)

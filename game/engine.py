@@ -132,7 +132,6 @@ class GameState:
         
         self.units = []
         self.turn = 0  # 0 for player, 1 for AI (used internally during phase processing)
-        self.gold = [20, 20]
         self.pigeons = []
         self.pigeon_limit = [1, 1]
         self.turn_count = 1
@@ -203,24 +202,7 @@ class GameState:
         report['history'] = unit.get_and_clear_log()
         return report
 
-    def recruit_unit(self, player_id):
-        cost = 10 
-        if self.gold[player_id] >= cost:
-            spawn_node = self.player_castle_node if player_id == 0 else self.enemy_castle_node
-            friendly_units = [u for u in self.get_units_at(spawn_node) if u.owner == player_id]
-            
-            if friendly_units:
-                friendly_units[0].count += 10
-                friendly_units[0].log_event("recruit_added", self.turn_count, "10 reinforcements recruited")
-            else:
-                new_unit = Unit(player_id, "Soldier", spawn_node, count=10)
-                new_unit.log_event("spawn", self.turn_count, f"Recruited at {spawn_node.name}")
-                self.units.append(new_unit)
-            
-            self.gold[player_id] -= cost
-            return True
-        return False
-    
+
     def merge_units(self):
         """Merges all units of the same owner on the same node"""
         for node in self.nodes:
@@ -665,17 +647,6 @@ class GameState:
 
     def process_end_of_turn(self):
         """Phase 6: Resource generation and end-of-side processing"""
-        # Base income (both sides get income once per full turn)
-        if self.turn == 0:
-            self.gold[0] += 5
-            self.gold[1] += 3 # AI generates 3 gold instead of 5
-            
-            # Gold from occupied unique tiles
-            p0_tiles = {u.node for u in self.units if u.owner == 0}
-            p1_tiles = {u.node for u in self.units if u.owner == 1}
-            self.gold[0] += len(p0_tiles)
-            self.gold[1] += len(p1_tiles)
-
         # Only player units passively observe (AI has full vision)
         if self.turn == 0:
             for unit in self.units:
@@ -704,10 +675,10 @@ class GameState:
         elif p2_at_player_castle:
             self.game_over = True
             self.winner = 1
-        elif not enemy_units and self.gold[1] < 10 and self.turn_count > 10:
+        elif not enemy_units:
             self.game_over = True
             self.winner = 0
-        elif not player_units and self.gold[0] < 10 and self.turn_count > 10:
+        elif not player_units:
             self.game_over = True
             self.winner = 1
 

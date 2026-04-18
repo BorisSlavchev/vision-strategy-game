@@ -26,9 +26,7 @@ class AIController:
         if self._should_delay():
             return
 
-        # Recruit if appropriate
-        if self.should_recruit(game_state):
-            game_state.recruit_unit(1)
+
 
         # Get and execute movement orders
         orders = self.get_orders(game_state)
@@ -46,9 +44,7 @@ class AIController:
             return True
         return False
 
-    def should_recruit(self, game_state):
-        """Decide whether to recruit this turn."""
-        return game_state.gold[1] >= self.RECRUIT_GOLD_THRESHOLD
+
 
     def get_orders(self, game_state):
         """
@@ -134,11 +130,14 @@ class AIController:
 
 
 class AggressiveAI(AIController):
-    """Rush toward the player's castle via shortest path. Recruits frequently."""
-
+    """
+    Aggressive AI:
+    - 3 units guard the castle.
+    - 7 units prioritize going for the enemy castle to win or killing enemy units.
+    - If roaming army is killed, send out the castle army using the same behavior.
+    """
     SCOUTING_DELAY = 1
     DELAY_INTERVAL = 6
-    RECRUIT_GOLD_THRESHOLD = 10  # Recruit as soon as possible
 
     def get_orders(self, game_state):
         orders = []
@@ -146,12 +145,18 @@ class AggressiveAI(AIController):
             return orders
 
         ai_units = self._get_ai_units(game_state)
-        # Process units furthest from home first to keep them moving
-        ai_units.sort(key=lambda u: self._get_distance(u.node, game_state.enemy_castle_node), reverse=True)
+        # Sort units by distance to enemy castle (furthest first)
+        ai_units.sort(key=lambda u: self._get_distance(u.node, game_state.player_castle_node), reverse=True)
         
         nodes_with_orders = self._get_units_with_pending_pigeons(game_state)
         player_castle = game_state.player_castle_node
         ai_castle = game_state.enemy_castle_node
+        player_units = self._get_player_units(game_state)
+        
+        total_ai_count = sum(u.count for u in game_state.units if u.owner == 1)
+
+        # Roaming army condition: if total units <= 3, the roaming army is dead, so deploy garrison.
+        deploy_garrison = total_ai_count <= 3
 
         for unit in ai_units:
             if not self._has_available_pigeon(game_state):
@@ -159,26 +164,32 @@ class AggressiveAI(AIController):
             if unit.node in nodes_with_orders:
                 continue
 
-            # If at castle and have enough units, split to diversify pressure
-            if unit.node == ai_castle and unit.count >= 10:
-                # Try to send a small squad down a non-occupied lane
-                targets = list(unit.node.neighbors)
-                # Pick neighbor with fewest AI units
-                target = min(targets, key=lambda n: sum(u.count for u in game_state.units if u.owner == 1 and u.node == n))
-                orders.append((unit.node, "move_attack", target, 5))
-                nodes_with_orders.add(unit.node)
+            # Garrison logic
+            if unit.node == ai_castle and not deploy_garrison:
+                # If we have more than 3 units at castle, split the excess to attack
+                if unit.count > 3:
+                    excess = unit.count - 3
+                    # Find a target to move to
+                    target_node = player_castle
+                    if player_units:
+                        closest_enemy = min(player_units, key=lambda u: self._get_distance(unit.node, u.node))
+                        if self._get_distance(unit.node, closest_enemy.node) <= 2:
+                            target_node = closest_enemy.node
+                            
+                    next_step = self._find_shortest_path_next_step(game_state, unit.node, target_node)
+                    if next_step:
+                        orders.append((unit.node, "move_attack", next_step, excess))
+                        nodes_with_orders.add(unit.node)
                 continue
 
-            # Attack player castle or intercept close player units
+            # Roaming / deployed garrison logic
             target_node = player_castle
-            player_units = self._get_player_units(game_state)
             if player_units:
                 closest_enemy = min(player_units, key=lambda u: self._get_distance(unit.node, u.node))
                 if self._get_distance(unit.node, closest_enemy.node) <= 2:
                     target_node = closest_enemy.node
 
-            next_step = self._find_shortest_path_next_step(
-                game_state, unit.node, target_node)
+            next_step = self._find_shortest_path_next_step(game_state, unit.node, target_node)
             if next_step:
                 orders.append((unit.node, "move_attack", next_step, None))
                 nodes_with_orders.add(unit.node)
@@ -186,12 +197,15 @@ class AggressiveAI(AIController):
         return orders
 
 
-class DefensiveAI(AIController):
-    """Hold positions, build up forces, only attack when significantly outnumbering."""
-
+class ConservativeAI(AIController):
+    """
+    Conservative AI:
+    - 7 units on its castle.
+    - 3 units closely wander around castle and guard against enemies.
+    - If roaming army is killed, send out the castle army following the same behavior.
+    """
     SCOUTING_DELAY = 4
     DELAY_INTERVAL = 4
-    RECRUIT_GOLD_THRESHOLD = 10  # Still recruit, but move less
 
     def get_orders(self, game_state):
         orders = []
@@ -199,16 +213,16 @@ class DefensiveAI(AIController):
             return orders
 
         ai_units = self._get_ai_units(game_state)
-        player_units = self._get_player_units(game_state)
         nodes_with_orders = self._get_units_with_pending_pigeons(game_state)
-        player_castle = game_state.player_castle_node
+        
         ai_castle = game_state.enemy_castle_node
-
+        player_units = self._get_player_units(game_state)
+        
         total_ai_count = sum(u.count for u in game_state.units if u.owner == 1)
-        total_player_count = sum(u.count for u in player_units) if player_units else 0
 
-        # Garrison requirement: keep 20 units at base
-        units_at_base = sum(u.count for u in ai_units if u.node == ai_castle)
+        # Roaming army condition: if total units <= 7, roaming is dead, deploy garrison.
+        deploy_garrison = total_ai_count <= 7
+        garrison_size = 7
 
         for unit in ai_units:
             if not self._has_available_pigeon(game_state):
@@ -216,122 +230,76 @@ class DefensiveAI(AIController):
             if unit.node in nodes_with_orders:
                 continue
 
-            # 1. Threat Response: If enemy is very close to base, focus everyone there
+            # Garrison logic
+            if unit.node == ai_castle and not deploy_garrison:
+                if unit.count > garrison_size:
+                    excess = unit.count - garrison_size
+                    # Send excess to wander closely around castle
+                    neighbors = list(ai_castle.neighbors)
+                    if neighbors:
+                        # Pick a random neighbor or one with enemies
+                        target_neighbor = neighbors[0]
+                        for n in neighbors:
+                            if self.get_units_at(game_state, n):
+                                target_neighbor = n
+                                break
+                        orders.append((unit.node, "move_attack", target_neighbor, excess))
+                        nodes_with_orders.add(unit.node)
+                continue
+
+            # Roaming logic (closely wandering around castle and guarding)
+            target_node = None
+            
+            # 1. Guard against nearby enemies
             enemies_near_base = [u for u in player_units if self._get_distance(u.node, ai_castle) <= 2]
-            if enemies_near_base and unit.node != ai_castle:
-                next_step = self._find_shortest_path_next_step(game_state, unit.node, ai_castle)
-                if next_step:
-                    orders.append((unit.node, "move_attack", next_step, None))
-                    nodes_with_orders.add(unit.node)
-                continue
-
-            # 2. Garrisoning logic
-            if unit.node == ai_castle:
-                if units_at_base < 20: # Stay and defend
+            if enemies_near_base:
+                closest_enemy = min(enemies_near_base, key=lambda u: self._get_distance(unit.node, u.node))
+                target_node = closest_enemy.node
+            else:
+                # 2. Wander closely around castle
+                if self._get_distance(unit.node, ai_castle) > 1:
+                    # Too far, return to adjacent
+                    next_step = self._find_shortest_path_next_step(game_state, unit.node, ai_castle)
+                    if next_step:
+                        # If wandering back to castle but not deploying garrison, don't enter if garrison is full
+                        if next_step == ai_castle and not deploy_garrison:
+                            units_at_base = sum(u.count for u in ai_units if u.node == ai_castle)
+                            if units_at_base >= garrison_size:
+                                continue # stay outside
+                        orders.append((unit.node, "move_attack", next_step, None))
+                        nodes_with_orders.add(unit.node)
                     continue
-                # If we have excess, send scouts (size 5) to adjacent nodes if empty
-                if unit.count > 25:
-                    empty_neighbors = [n for n in unit.node.neighbors if not self.get_units_at(game_state, n)]
-                    if empty_neighbors:
-                        orders.append((unit.node, "move_attack", empty_neighbors[0], 5))
-                        nodes_with_orders.add(unit.node)
-                        continue
+                else:
+                    # Patrol to another adjacent node
+                    neighbors = list(ai_castle.neighbors)
+                    if neighbors:
+                        # rotate to a neighbor
+                        if unit.node in neighbors:
+                            idx = neighbors.index(unit.node)
+                            target_node = neighbors[(idx + 1) % len(neighbors)]
+                        else:
+                            target_node = neighbors[0]
 
-            # 3. Only full attack if ratio is high
-            if total_ai_count >= total_player_count * 2.0 or total_ai_count >= 50:
-                next_step = self._find_shortest_path_next_step(game_state, unit.node, player_castle)
+            if target_node:
+                next_step = self._find_shortest_path_next_step(game_state, unit.node, target_node)
                 if next_step:
+                    if next_step == ai_castle and not deploy_garrison:
+                        units_at_base = sum(u.count for u in ai_units if u.node == ai_castle)
+                        if units_at_base >= garrison_size:
+                            continue # stay outside
                     orders.append((unit.node, "move_attack", next_step, None))
                     nodes_with_orders.add(unit.node)
-            else:
-                # If away from base and no immediate threat, stay put or fall back if outnumbered locally
-                if unit.node != ai_castle:
-                    local_enemies = [u for u in player_units if self._get_distance(u.node, unit.node) <= 1]
-                    if sum(u.count for u in local_enemies) > unit.count:
-                        next_step = self._find_shortest_path_next_step(game_state, unit.node, ai_castle)
-                        if next_step:
-                            orders.append((unit.node, "move_attack", next_step, None))
-                            nodes_with_orders.add(unit.node)
-
-        return orders
-
-
-class BalancedAI(AIController):
-    """Recruit, expand to control tiles, then push when strong enough."""
-
-    SCOUTING_DELAY = 2
-    DELAY_INTERVAL = 5
-    RECRUIT_GOLD_THRESHOLD = 15
-
-    def get_orders(self, game_state):
-        orders = []
-        if not self._has_available_pigeon(game_state):
-            return orders
-
-        ai_units = self._get_ai_units(game_state)
-        player_units = self._get_player_units(game_state)
-        nodes_with_orders = self._get_units_with_pending_pigeons(game_state)
-        player_castle = game_state.player_castle_node
-        ai_castle = game_state.enemy_castle_node
-
-        total_ai_count = sum(u.count for u in game_state.units if u.owner == 1)
-        total_player_count = sum(u.count for u in player_units) if player_units else 0
-
-        # Define map "Center" (Node 9 for MOBA, or heuristic)
-        center_node = None
-        for node in game_state.nodes:
-            if node.id == 9: # MOBA specific
-                center_node = node
-                break
-        if not center_node:
-            # Grid fallback: find node closest to geometric center
-            avg_x = sum(n.x for n in game_state.nodes) / len(game_state.nodes)
-            avg_y = sum(n.y for n in game_state.nodes) / len(game_state.nodes)
-            center_node = min(game_state.nodes, key=lambda n: (n.x-avg_x)**2 + (n.y-avg_y)**2)
-
-        for unit in ai_units:
-            if not self._has_available_pigeon(game_state):
-                break
-            if unit.node in nodes_with_orders:
-                continue
-
-            # Phase 1: Early game Expansion (Control the Center)
-            if self.turns_played < 15:
-                if unit.node == ai_castle and unit.count >= 10:
-                    orders.append((unit.node, "move_attack", center_node, 10))
-                    nodes_with_orders.add(unit.node)
-                elif unit.node != center_node:
-                    next_step = self._find_shortest_path_next_step(game_state, unit.node, center_node)
-                    if next_step:
-                        orders.append((unit.node, "move_attack", next_step, None))
-                        nodes_with_orders.add(unit.node)
-                continue
-
-            # Phase 2: Mid game — opportunistic pushes
-            if total_ai_count >= total_player_count * 1.5 or total_ai_count >= 40:
-                next_step = self._find_shortest_path_next_step(game_state, unit.node, player_castle)
-                if next_step:
-                    orders.append((unit.node, "move_attack", next_step, None))
-                    nodes_with_orders.add(unit.node)
-            else:
-                # Hold the center or closest strategic node
-                if unit.node != center_node:
-                    next_step = self._find_shortest_path_next_step(game_state, unit.node, center_node)
-                    if next_step:
-                        orders.append((unit.node, "move_attack", next_step, None))
-                        nodes_with_orders.add(unit.node)
 
         return orders
 
 
 # Registry of available AI types
 AI_TYPES = {
-    "Balanced": BalancedAI,
     "Aggressive": AggressiveAI,
-    "Defensive": DefensiveAI,
+    "Conservative": ConservativeAI,
 }
 
-def create_ai(ai_type="Balanced"):
+def create_ai(ai_type="Aggressive"):
     """Factory function to create an AI controller by type name."""
-    cls = AI_TYPES.get(ai_type, BalancedAI)
+    cls = AI_TYPES.get(ai_type, AggressiveAI)
     return cls()
