@@ -473,8 +473,6 @@ class GameState:
                 
                 moving_unit.log_event("move_start", self.turn_count, f"Started move to {target_node.name} (ETA: {travel_time} turns)")
                 
-        elif command["type"] == "report":
-            return self.get_unit_report(unit)
         return None
 
     def finalize_move_attack(self, moving_unit):
@@ -577,6 +575,26 @@ class GameState:
         # 1. Receive Arrived Orders
         for pigeon in self.pigeons:
             if pigeon.owner == self.turn and not pigeon.returning and pigeon.arrived and getattr(pigeon, 'dispatched', False):
+                
+                if pigeon.command['type'] == 'report':
+                    units_at_target = self.get_units_at(pigeon.target_node)
+                    friendly_count = sum(u.count for u in units_at_target if u.owner == pigeon.owner)
+                    enemy_count = sum(u.count for u in units_at_target if u.owner != pigeon.owner)
+                    
+                    pigeon.payload = {
+                        'position': pigeon.target_node.name,
+                        'is_report': True,
+                        'friendly_count': friendly_count,
+                        'enemy_count': enemy_count
+                    }
+                    
+                    travel_back_time = self.calculate_travel_time(pigeon.target_node, pigeon.source_node)
+                    pigeon.returning = True
+                    pigeon.arrived = False
+                    pigeon.turns_to_reach = travel_back_time 
+                    pigeon.total_turns = travel_back_time
+                    continue
+
                 # Pigeon has arrived at unit from previous turn's travel, deliver now
                 units_to_command = pigeon.units if pigeon.units else self.get_units_at(pigeon.target_node)
                 friendly_units = [u for u in units_to_command if u.owner == pigeon.owner]
@@ -623,14 +641,7 @@ class GameState:
         for unit in self.units:
             if unit.owner == self.turn and unit.pending_command:
                 print(f"DEBUG: Unit {unit.owner} starting command {unit.pending_command['type']}")
-                result = self.execute_command(unit, unit.pending_command)
-                # If command was a report, find the pigeon that delivered it to store the result
-                if result:
-                    # Find any pigeon that just arrived at this unit's node and is returning
-                    for pigeon in self.pigeons:
-                        if pigeon.owner == unit.owner and pigeon.returning and pigeon.target_node == unit.node:
-                            pigeon.payload = result
-                
+                self.execute_command(unit, unit.pending_command)
                 unit.pending_command = None
 
         # 2. Progress travel for all units belonging to the current player

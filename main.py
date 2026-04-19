@@ -223,7 +223,7 @@ class Game:
         self.voice_recording_enabled = False
         
         # AI Settings
-        self.ai_types = ["Aggressive", "Conservative"]
+        self.ai_types = ["AI 1", "AI 2", "AI 3", "AI 4", "AI 5", "AI 6"]
         self.selected_ai_index = 0
         
         # AI Thinking Animation
@@ -288,8 +288,12 @@ class Game:
 
     def start_new_game(self):
         map_name = self.available_maps[self.selected_map_index] if self.available_maps else "default_3x3"
-        ai_type = self.ai_types[self.selected_ai_index]
-        self.state = GameState(mode=self.selected_mode, automated_phases=self.automated_phases, map_name=map_name, ai_type=ai_type)
+        ai_label = self.ai_types[self.selected_ai_index]
+        if ai_label in ["AI 1", "AI 2", "AI 3"]:
+            actual_ai_type = "Conservative"
+        else:
+            actual_ai_type = "Aggressive"
+        self.state = GameState(mode=self.selected_mode, automated_phases=self.automated_phases, map_name=map_name, ai_type=actual_ai_type)
         self.ui_state = UIState.PLAYING
         # Reset camera for new game
         self.camera_x = 0
@@ -474,8 +478,9 @@ class Game:
         turn_count_text = f"Turn #: {self.state.turn_count}"
         self.screen.blit(self.font.render(turn_count_text, True, BLACK), (sec1_x, curr_y + 80))
         
-        ai_type_text = f"AI: {self.state.ai_type}"
-        self.screen.blit(self.font.render(ai_type_text, True, RED), (sec1_x, curr_y + 105))
+        # AI type text removed from game view to obfuscate it
+        # ai_type_text = f"AI: {self.state.ai_type}"
+        # self.screen.blit(self.font.render(ai_type_text, True, RED), (sec1_x, curr_y + 105))
         
         if self.audio_recorder.is_recording:
             # Pulsing red circle indicating recording
@@ -717,61 +722,13 @@ class Game:
             curr_y += 5
             draw_text(report['message'])
             curr_y += 10
-        else:
-            draw_text("UNIT STATUS", bold=True)
+        elif 'is_report' in report:
+            draw_text("REPORT", bold=True)
             curr_y += 5
-            draw_text(f"Soldiers remaining: {report['count']}")
+            draw_text(f"Your units present: {report.get('friendly_count', 0)}")
             curr_y += 15
-            
-            draw_text("SIGHTINGS", bold=True)
-            curr_y += 5
-            if not report.get('friendly_adjacent') and not report.get('enemy_adjacent'):
-                draw_text("No nearby units spotted.", color=DARK_GRAY)
-            else:
-                for f in report.get('friendly_adjacent', []):
-                    draw_text(f"Ally: {f['count']} @{f['pos']}", color=BLUE)
-                for e in report.get('enemy_adjacent', []):
-                    draw_text(f"ENEMY: {e['count']} @{e['pos']}", color=RED)
+            draw_text(f"Enemy units present: {report.get('enemy_count', 0)}", color=RED)
             curr_y += 15
-            
-            # History Section
-            draw_text("EVENT LOG", bold=True)
-            curr_y += 5
-            history = report.get('history', [])
-            if not history:
-                draw_text("No recent events logged.", color=DARK_GRAY)
-            else:
-                # Group history by turn
-                history_by_turn = {}
-                for h in history:
-                    t = h['turn']
-                    if t not in history_by_turn: history_by_turn[t] = []
-                    history_by_turn[t].append(h)
-
-                EVENT_COLORS = {
-                    'spawn': (0, 150, 0),   # Green
-                    'move_start': (100, 50, 150),  # Purple
-                    'move_arrive': (100, 50, 150),
-                    'split': (255, 165, 0),  # Orange
-                    'merge': (255, 165, 0),
-                    'combat': (139, 0, 0),  # Dark Red
-                    'recruit_added': (0, 150, 0),
-                    'ally_spotted': BLUE,
-                    'enemy_spotted': RED,
-                    'ally_move': BLUE,
-                    'enemy_move': RED,
-                    'ally_departure': BLUE,
-                    'enemy_departure': RED,
-                    'ally_arrival': BLUE,
-                    'enemy_arrival': RED,
-                }
-                
-                for t in sorted(history_by_turn.keys(), reverse=True):
-                    draw_text(f"--- Turn {t} ---", color=DARK_GRAY)
-                    for h in reversed(history_by_turn[t]):
-                        e_type = h['type']
-                        color = EVENT_COLORS.get(e_type, BLACK)
-                        draw_text(f"[{e_type.upper()}] {h['details']}", color=color)
         
         self.screen.set_clip(None)
 
