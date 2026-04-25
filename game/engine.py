@@ -163,9 +163,20 @@ class GameState:
         u0.log_event("spawn", 1, f"Initial deployment at {self.player_castle_node.name}")
         self.units.append(u0)
         
-        u1 = Unit(1, "Soldier", self.enemy_castle_node, count=10)
-        u1.log_event("spawn", 1, f"Initial deployment at {self.enemy_castle_node.name}")
-        self.units.append(u1)
+        if ai_type == "Tutorial":
+            u1_base = Unit(1, "Soldier", self.enemy_castle_node, count=5)
+            u1_base.log_event("spawn", 1, f"Initial deployment at {self.enemy_castle_node.name}")
+            self.units.append(u1_base)
+            
+            c_node = next((n for n in self.nodes if n.name == "C"), None)
+            if c_node:
+                u1_c = Unit(1, "Soldier", c_node, count=5)
+                u1_c.log_event("spawn", 1, f"Initial deployment at {c_node.name}")
+                self.units.append(u1_c)
+        else:
+            u1 = Unit(1, "Soldier", self.enemy_castle_node, count=10)
+            u1.log_event("spawn", 1, f"Initial deployment at {self.enemy_castle_node.name}")
+            self.units.append(u1)
         
         self.update_visibility()
         self.merge_units()
@@ -579,14 +590,36 @@ class GameState:
                 if pigeon.command['type'] == 'report':
                     units_at_target = self.get_units_at(pigeon.target_node)
                     friendly_count = sum(u.count for u in units_at_target if u.owner == pigeon.owner)
-                    enemy_count = sum(u.count for u in units_at_target if u.owner != pigeon.owner)
                     
-                    pigeon.payload = {
-                        'position': pigeon.target_node.name,
-                        'is_report': True,
-                        'friendly_count': friendly_count,
-                        'enemy_count': enemy_count
-                    }
+                    if friendly_count == 0:
+                        pigeon.payload = {
+                            'position': pigeon.target_node.name,
+                            'message': "No friendly units present to provide a report.",
+                            'count': 0,
+                            'friendly_adjacent': [],
+                            'enemy_adjacent': []
+                        }
+                    else:
+                        enemy_count = sum(u.count for u in units_at_target if u.owner != pigeon.owner)
+                        
+                        friendly_adj = []
+                        enemy_adj = []
+                        for neighbor in pigeon.target_node.neighbors:
+                            n_units = self.get_units_at(neighbor)
+                            for u in n_units:
+                                if u.owner == pigeon.owner:
+                                    friendly_adj.append({'pos': neighbor.name, 'count': u.count})
+                                else:
+                                    enemy_adj.append({'pos': neighbor.name, 'count': u.count})
+                        
+                        pigeon.payload = {
+                            'position': pigeon.target_node.name,
+                            'is_report': True,
+                            'friendly_count': friendly_count,
+                            'enemy_count': enemy_count,
+                            'friendly_adjacent': friendly_adj,
+                            'enemy_adjacent': enemy_adj
+                        }
                     
                     travel_back_time = self.calculate_travel_time(pigeon.target_node, pigeon.source_node)
                     pigeon.returning = True
