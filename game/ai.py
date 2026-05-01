@@ -5,6 +5,7 @@ Includes configurable scouting delays to simulate tempo cost.
 """
 
 from collections import deque
+import random
 
 
 class AIController:
@@ -30,19 +31,13 @@ class AIController:
 
         # Get and execute movement orders
         orders = self.get_orders(game_state)
-        for order in orders:
-            target_node, command_type, data, count = order
-            game_state.send_pigeon_to_tile(1, target_node, command_type, data, count=count)
+        if orders:
+            target_node, command_type, data, count = orders[0]
+            game_state.issue_order_to_tile(1, target_node, command_type, data, count=count)
 
     def _should_delay(self):
         """Check if the AI should skip this turn to simulate scouting delay."""
-        if self.turns_played <= self.SCOUTING_DELAY:
-            # Initial delay at the start of the game
-            return True
-        if self.DELAY_INTERVAL > 0 and self.turns_played % self.DELAY_INTERVAL == 0:
-            # Periodic delay every N turns
-            return True
-        return False
+        return random.random() < 0.20
 
 
 
@@ -67,10 +62,9 @@ class AIController:
         """Get all player units (full vision cheat)."""
         return [u for u in game_state.units if u.owner == 0]
 
-    def _has_available_pigeon(self, game_state):
+    def _can_issue_order(self, game_state):
         """Check if the AI has a pigeon available to send."""
-        active_pigeons = [p for p in game_state.pigeons if p.owner == 1]
-        return len(active_pigeons) < game_state.pigeon_limit[1]
+        return game_state.pending_orders[1] is None
 
     def _get_distance(self, source, target):
         """Find the distance between two nodes."""
@@ -116,12 +110,12 @@ class AIController:
                 return None
         return current
 
-    def _get_units_with_pending_pigeons(self, game_state):
-        """Get set of nodes that already have inbound pigeons from AI."""
+    def _get_units_with_pending_orders(self, game_state):
+        """Get set of nodes that already have pending orders from AI."""
         nodes_with_orders = set()
-        for pigeon in game_state.pigeons:
-            if pigeon.owner == 1 and not pigeon.returning:
-                nodes_with_orders.add(pigeon.target_node)
+        order = game_state.pending_orders[1]
+        if order is not None:
+            nodes_with_orders.add(order["target_node"])
         return nodes_with_orders
 
     def get_units_at(self, game_state, node):
@@ -141,14 +135,14 @@ class AggressiveAI(AIController):
 
     def get_orders(self, game_state):
         orders = []
-        if not self._has_available_pigeon(game_state):
+        if not self._can_issue_order(game_state):
             return orders
 
         ai_units = self._get_ai_units(game_state)
         # Sort units by distance to enemy castle (furthest first)
         ai_units.sort(key=lambda u: self._get_distance(u.node, game_state.player_castle_node), reverse=True)
         
-        nodes_with_orders = self._get_units_with_pending_pigeons(game_state)
+        nodes_with_orders = self._get_units_with_pending_orders(game_state)
         player_castle = game_state.player_castle_node
         ai_castle = game_state.enemy_castle_node
         player_units = self._get_player_units(game_state)
@@ -159,7 +153,7 @@ class AggressiveAI(AIController):
         deploy_garrison = total_ai_count <= 3
 
         for unit in ai_units:
-            if not self._has_available_pigeon(game_state):
+            if not self._can_issue_order(game_state):
                 break
             if unit.node in nodes_with_orders:
                 continue
@@ -176,9 +170,15 @@ class AggressiveAI(AIController):
                         if self._get_distance(unit.node, closest_enemy.node) <= 2:
                             target_node = closest_enemy.node
                             
-                    next_step = self._find_shortest_path_next_step(game_state, unit.node, target_node)
+                    if random.random() < 0.25 and unit.node.neighbors:
+                        next_step = random.choice(list(unit.node.neighbors))
+                    else:
+                        next_step = self._find_shortest_path_next_step(game_state, unit.node, target_node)
                     if next_step:
-                        orders.append((unit.node, "move_attack", next_step, excess))
+                        count_to_move = excess
+                        if excess > 5 and random.random() < 0.5:
+                            count_to_move = excess // 2
+                        orders.append((unit.node, "move_attack", next_step, count_to_move))
                         nodes_with_orders.add(unit.node)
                 continue
 
@@ -189,9 +189,15 @@ class AggressiveAI(AIController):
                 if self._get_distance(unit.node, closest_enemy.node) <= 2:
                     target_node = closest_enemy.node
 
-            next_step = self._find_shortest_path_next_step(game_state, unit.node, target_node)
+            if random.random() < 0.25 and unit.node.neighbors:
+                next_step = random.choice(list(unit.node.neighbors))
+            else:
+                next_step = self._find_shortest_path_next_step(game_state, unit.node, target_node)
             if next_step:
-                orders.append((unit.node, "move_attack", next_step, None))
+                count_to_move = None
+                if unit.count > 5 and random.random() < 0.5:
+                    count_to_move = unit.count // 2
+                orders.append((unit.node, "move_attack", next_step, count_to_move))
                 nodes_with_orders.add(unit.node)
 
         return orders
@@ -209,11 +215,11 @@ class ConservativeAI(AIController):
 
     def get_orders(self, game_state):
         orders = []
-        if not self._has_available_pigeon(game_state):
+        if not self._can_issue_order(game_state):
             return orders
 
         ai_units = self._get_ai_units(game_state)
-        nodes_with_orders = self._get_units_with_pending_pigeons(game_state)
+        nodes_with_orders = self._get_units_with_pending_orders(game_state)
         
         ai_castle = game_state.enemy_castle_node
         player_units = self._get_player_units(game_state)
@@ -225,7 +231,7 @@ class ConservativeAI(AIController):
         garrison_size = 7
 
         for unit in ai_units:
-            if not self._has_available_pigeon(game_state):
+            if not self._can_issue_order(game_state):
                 break
             if unit.node in nodes_with_orders:
                 continue
@@ -237,13 +243,20 @@ class ConservativeAI(AIController):
                     # Send excess to wander closely around castle
                     neighbors = list(ai_castle.neighbors)
                     if neighbors:
-                        # Pick a random neighbor or one with enemies
-                        target_neighbor = neighbors[0]
-                        for n in neighbors:
-                            if self.get_units_at(game_state, n):
-                                target_neighbor = n
-                                break
-                        orders.append((unit.node, "move_attack", target_neighbor, excess))
+                        if random.random() < 0.25:
+                            target_neighbor = random.choice(neighbors)
+                        else:
+                            # Pick a random neighbor or one with enemies
+                            target_neighbor = neighbors[0]
+                            for n in neighbors:
+                                if self.get_units_at(game_state, n):
+                                    target_neighbor = n
+                                    break
+                                    
+                        count_to_move = excess
+                        if excess > 5 and random.random() < 0.5:
+                            count_to_move = excess // 2
+                        orders.append((unit.node, "move_attack", target_neighbor, count_to_move))
                         nodes_with_orders.add(unit.node)
                 continue
 
@@ -259,14 +272,21 @@ class ConservativeAI(AIController):
                 # 2. Wander closely around castle
                 if self._get_distance(unit.node, ai_castle) > 1:
                     # Too far, return to adjacent
-                    next_step = self._find_shortest_path_next_step(game_state, unit.node, ai_castle)
+                    if random.random() < 0.25 and unit.node.neighbors:
+                        next_step = random.choice(list(unit.node.neighbors))
+                    else:
+                        next_step = self._find_shortest_path_next_step(game_state, unit.node, ai_castle)
                     if next_step:
                         # If wandering back to castle but not deploying garrison, don't enter if garrison is full
                         if next_step == ai_castle and not deploy_garrison:
                             units_at_base = sum(u.count for u in ai_units if u.node == ai_castle)
                             if units_at_base >= garrison_size:
                                 continue # stay outside
-                        orders.append((unit.node, "move_attack", next_step, None))
+                        
+                        count_to_move = None
+                        if unit.count > 5 and random.random() < 0.5:
+                            count_to_move = unit.count // 2
+                        orders.append((unit.node, "move_attack", next_step, count_to_move))
                         nodes_with_orders.add(unit.node)
                     continue
                 else:
@@ -281,13 +301,20 @@ class ConservativeAI(AIController):
                             target_node = neighbors[0]
 
             if target_node:
-                next_step = self._find_shortest_path_next_step(game_state, unit.node, target_node)
+                if random.random() < 0.25 and unit.node.neighbors:
+                    next_step = random.choice(list(unit.node.neighbors))
+                else:
+                    next_step = self._find_shortest_path_next_step(game_state, unit.node, target_node)
                 if next_step:
                     if next_step == ai_castle and not deploy_garrison:
                         units_at_base = sum(u.count for u in ai_units if u.node == ai_castle)
                         if units_at_base >= garrison_size:
                             continue # stay outside
-                    orders.append((unit.node, "move_attack", next_step, None))
+                            
+                    count_to_move = None
+                    if unit.count > 5 and random.random() < 0.5:
+                        count_to_move = unit.count // 2
+                    orders.append((unit.node, "move_attack", next_step, count_to_move))
                     nodes_with_orders.add(unit.node)
 
         return orders

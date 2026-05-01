@@ -242,7 +242,6 @@ class Game:
         # Temporary UI Elements
         self.floating_messages = [] # List of {'text': str, 'pos': (x,y), 'life': int}
         self.notifications = []     # List of {'text': str, 'life': int}
-        self.last_pigeon_count = 0  # To detect pigeon returns
         
         # Report UI State
         self.report_popup_visible = False
@@ -333,42 +332,6 @@ class Game:
                 return node
         return None
 
-    def draw_pigeons(self):
-        """Draw pigeons as small triangles traveling between nodes"""
-        return # Pigeons are now invisible in all modes
-
-        for pigeon in self.state.pigeons:
-
-            progress = pigeon.get_progress()
-            
-            if pigeon.returning:
-                # From target back to source (castle)
-                start_pos = self.get_node_pos(pigeon.target_node)
-                end_pos = self.get_node_pos(pigeon.source_node)
-            else:
-                # From source (castle) to target
-                start_pos = self.get_node_pos(pigeon.source_node)
-                end_pos = self.get_node_pos(pigeon.target_node)
-            
-            # Interpolate position
-            curr_x = start_pos[0] + (end_pos[0] - start_pos[0]) * progress
-            curr_y = start_pos[1] + (end_pos[1] - start_pos[1]) * progress
-            
-            # Draw pigeon as a small colored triangle
-            color = BLUE if pigeon.owner == 0 else RED
-            size = 8
-            points = [
-                (curr_x, curr_y - size),
-                (curr_x - size, curr_y + size),
-                (curr_x + size, curr_y + size)
-            ]
-            pygame.draw.polygon(self.screen, color, points)
-            pygame.draw.polygon(self.screen, BLACK, points, 1)
-            
-            # Draw a small "P" label
-            p_text = self.font.render("P", True, WHITE)
-            self.screen.blit(p_text, (curr_x - 4, curr_y - 5))
-
     def draw_gameplay(self):
         self.screen.fill(WHITE)
         
@@ -391,13 +354,7 @@ class Game:
                 nnx, nny = self.get_node_pos(neighbor)
                 pygame.draw.line(self.screen, BLACK, (nx, ny), (nnx, nny), 1)
                 
-                # Draw travel time at midpoint of edge
-                travel_time = node.get_travel_time(neighbor)
-                mid_x = (nx + nnx) // 2
-                mid_y = (ny + nny) // 2
-                time_text = self.font.render(str(travel_time), True, PURPLE)
-                # Offset slightly to avoid overlapping the line
-                self.screen.blit(time_text, (mid_x - 5, mid_y - 10))
+
                 
                 drawn_edges.add(edge_key)
 
@@ -457,8 +414,6 @@ class Game:
                 count_text = self.font.render(str(unit.count), True, WHITE)
                 self.screen.blit(count_text, (nx - 10, ny - 10))
 
-        # Draw pigeons
-        self.draw_pigeons()
 
         # Draw UI Sidebar (Bottom Panel)
         panel_y = SCREEN_HEIGHT - BOTTOM_PANEL_HEIGHT
@@ -466,8 +421,8 @@ class Game:
         pygame.draw.rect(self.screen, GRAY, (0, panel_y, panel_w, BOTTOM_PANEL_HEIGHT))
         pygame.draw.line(self.screen, BLACK, (0, panel_y), (panel_w, panel_y), 2)
         
-        # Calculate section widths (4 equal sections)
-        section_w = panel_w // 4
+        # Calculate section widths (3 equal sections)
+        section_w = panel_w // 3
         
         # Section 1: Kingdom Info
         sec1_x = 10
@@ -499,49 +454,36 @@ class Game:
         # Divider 1
         pygame.draw.line(self.screen, BLACK, (section_w, panel_y), (section_w, SCREEN_HEIGHT), 2)
         
-        # Section 2: Resources
+        # Section 2: Available Orders
         sec2_x = section_w + 10
         curr_y = panel_y + 15
-        title_surf = pygame.font.SysFont("Arial", 18, bold=True).render("Resources", True, BLACK)
+        title_surf = pygame.font.SysFont("Arial", 18, bold=True).render("Available Orders", True, BLACK)
         self.screen.blit(title_surf, (sec2_x, curr_y))
         
-        self.screen.blit(self.font.render("No Resources", True, DARK_GRAY), (sec2_x, curr_y + 30))
+        available = 0 if self.state.pending_orders[0] is not None else 1
+        limit = 1
+        self.screen.blit(self.font.render(f"{available}/{limit}", True, BLACK), (sec2_x, curr_y + 30))
+        
+        if self.state.pending_orders[0]:
+            self.screen.blit(self.font.render("Order Issued", True, RED), (sec2_x, curr_y + 55))
+        else:
+            self.screen.blit(self.font.render("Awaiting Order...", True, DARK_GRAY), (sec2_x, curr_y + 55))
         
         # Divider 2
         pygame.draw.line(self.screen, BLACK, (section_w * 2, panel_y), (section_w * 2, SCREEN_HEIGHT), 2)
         
-        # Section 3: Available Pigeons
+        # Section 3: Quick Controls
         sec3_x = section_w * 2 + 10
         curr_y = panel_y + 15
-        title_surf = pygame.font.SysFont("Arial", 18, bold=True).render("Available Pigeons", True, BLACK)
-        self.screen.blit(title_surf, (sec3_x, curr_y))
-        
-        active_pigeons = [p for p in self.state.pigeons if p.owner == 0]
-        limit = self.state.pigeon_limit[0]
-        available = limit - len(active_pigeons)
-        self.screen.blit(self.font.render(f"{available}/{limit}", True, BLACK), (sec3_x, curr_y + 30))
-        
-        for i, p in enumerate(active_pigeons[:3]): # Show up to 3 pigeons
-            status = "Ret" if p.returning else f"Out({p.turns_to_reach}t)"
-            p_info = f"P{i+1}: {status}"
-            self.screen.blit(self.font.render(p_info, True, DARK_GRAY), (sec3_x, curr_y + 55 + i * 20))
-        
-        # Divider 3
-        pygame.draw.line(self.screen, BLACK, (section_w * 3, panel_y), (section_w * 3, SCREEN_HEIGHT), 2)
-        
-        # Section 4: Quick Controls
-        sec4_x = section_w * 3 + 10
-        curr_y = panel_y + 15
         title_surf = pygame.font.SysFont("Arial", 18, bold=True).render("Quick Controls", True, BLACK)
-        self.screen.blit(title_surf, (sec4_x, curr_y))
+        self.screen.blit(title_surf, (sec3_x, curr_y))
         
         controls = [
             "R-Click: Order",
-            "SPACE: End Turn",
-            "ESC: Menu"
+            "SPACE: End Turn"
         ]
         for i, ctrl in enumerate(controls):
-            self.screen.blit(self.font.render(ctrl, True, BLACK), (sec4_x, curr_y + 30 + i * 25))
+            self.screen.blit(self.font.render(ctrl, True, BLACK), (sec3_x, curr_y + 30 + i * 25))
 
         # Draw Report Panel (Right)
         sidebar_rect = pygame.Rect(SCREEN_WIDTH - REPORT_PANEL_WIDTH, 0, REPORT_PANEL_WIDTH, SCREEN_HEIGHT)
@@ -570,17 +512,13 @@ class Game:
             
             # Only draw and track if visible (or partially visible) in the clip area
             if box_rect.bottom > content_rect.top and box_rect.top < content_rect.bottom:
-                # Color code reports: unread reports (bright cyan), read reports (light lavender), dispatch orders (white)
+                # Color code reports: unread reports (bright cyan), read reports (light lavender)
                 report_id = id(report)
-                is_actual_report = 'history' in report and report['history']
                 
-                if is_actual_report:
-                    if report_id not in self.read_reports:
-                        pygame.draw.rect(self.screen, (150, 220, 255), box_rect) # Bright cyan - unread report
-                    else:
-                        pygame.draw.rect(self.screen, (220, 210, 255), box_rect) # Light lavender - read report
+                if report_id not in self.read_reports:
+                    pygame.draw.rect(self.screen, (150, 220, 255), box_rect) # Bright cyan - unread report
                 else:
-                    pygame.draw.rect(self.screen, WHITE, box_rect) # White - dispatch orders
+                    pygame.draw.rect(self.screen, (220, 210, 255), box_rect) # Light lavender - read report
                 
                 pygame.draw.rect(self.screen, BLACK, box_rect, 1)
                 
@@ -593,8 +531,6 @@ class Game:
                 summary = f"Turn {turn_received} | Pos: {report['position']}"
                 if report.get('message'):
                     summary += " | Msg"
-                elif 'history' in report and report['history']:
-                    summary += " | Hist"
                 
                 if 'available_turn' in report:
                     summary += f" | Ret: T{report['available_turn']}"
@@ -733,8 +669,6 @@ class Game:
             curr_y += 5
             draw_text(f"Your units present: {report.get('friendly_count', 0)}")
             curr_y += 15
-            draw_text(f"Enemy units present: {report.get('enemy_count', 0)}", color=RED)
-            curr_y += 15
             
             f_adj = report.get('friendly_adjacent', [])
             e_adj = report.get('enemy_adjacent', [])
@@ -784,7 +718,7 @@ class Game:
         title_rect = title_surf.get_rect(center=(SCREEN_WIDTH//2, 150))
         self.screen.blit(title_surf, title_rect)
         
-        subtitle_surf = self.font.render("A Pigeon-Based Strategy Game", True, WHITE)
+        subtitle_surf = self.font.render("A Strategy Game", True, WHITE)
         subtitle_rect = subtitle_surf.get_rect(center=(SCREEN_WIDTH//2, 210))
         self.screen.blit(subtitle_surf, subtitle_rect)
         
@@ -876,7 +810,7 @@ class Game:
                                             # Trigger the move action
                                             cmd = opt["command"]
                                             data = opt["data"]
-                                            self.state.send_pigeon_to_tile(0, data[0], cmd, data[1], count=val)
+                                            self.state.issue_order_to_tile(0, data[0], cmd, data[1], count=val)
                                             self.context_menu.hide()
                                             break
 
@@ -921,6 +855,12 @@ class Game:
                                             ], target_node)
                                             continue
                                         
+                                        # Retrieve the text input value before the context menu state is cleared
+                                        if menu_result.get("is_splitter") and self.context_menu.text_input:
+                                            val = self.context_menu.text_input.get_value()
+                                            if val is not None:
+                                                menu_result["amount"] = val
+                                                
                                         # If it wasn't a transition, hide it now
                                         self.context_menu.hide()
 
@@ -931,11 +871,11 @@ class Game:
 
                                         data = menu_result.get("data")
                                         if cmd == "report":
-                                            self.state.send_pigeon_to_tile(0, data, "report", None)
+                                            self.state.issue_order_to_tile(0, data, "report", None)
                                         elif cmd == "move_attack":
                                             source_node, target_node = data
                                             count = menu_result.get("amount")
-                                            self.state.send_pigeon_to_tile(0, source_node, "move_attack", target_node, count=count)
+                                            self.state.issue_order_to_tile(0, source_node, "move_attack", target_node, count=count)
                                 elif in_map_area:
                                     # Start drag for panning
                                     self.is_dragging = True
@@ -956,11 +896,10 @@ class Game:
                                     if self.state.phases[self.state.current_phase_index] != "Give Orders":
                                         continue
                                     
-                                    # Check pigeon availability
-                                    active_pigeons = [p for p in self.state.pigeons if p.owner == 0]
-                                    if len(active_pigeons) >= self.state.pigeon_limit[0]:
+                                    # Check order availability
+                                    if self.state.pending_orders[0] is not None:
                                         self.floating_messages.append({
-                                            'text': "No Pigeons Available",
+                                            'text': "1 Order Per Turn",
                                             'pos': event.pos,
                                             'life': 60
                                         })
@@ -1018,14 +957,14 @@ class Game:
                                 # Mark the new turn in the audio recording
                                 self.audio_recorder.mark_turn(self.state.turn_count)
                                 
-                                # Check for returned pigeons
-                                if hasattr(self.state, 'returned_pigeons'):
-                                    for p in self.state.returned_pigeons:
-                                        if p.owner == 0: # Only notify player
-                                            self.notifications.append({
-                                                'text': "A pigeon has returned!",
-                                                'life': 180
-                                            })
+                                # Check for received reports
+                                if hasattr(self.state, 'reports') and len(self.state.reports[0]) > 0:
+                                    last_report = self.state.reports[0][-1]
+                                    if last_report.get('turn_received') == self.state.turn_count:
+                                        self.notifications.append({
+                                            'text': "A report has arrived!",
+                                            'life': 180
+                                        })
                         
                         # Handle mouse button release (stop dragging)
                         if event.type == pygame.MOUSEBUTTONUP:

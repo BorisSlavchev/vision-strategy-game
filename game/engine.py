@@ -3,7 +3,6 @@ import os
 import random
 from collections import deque
 from .graph import create_grid, create_map_from_json
-from .pigeon import Pigeon
 from .ai import create_ai
 
 class Unit:
@@ -13,12 +12,7 @@ class Unit:
         self.node = node
         self.count = count # Number of soldiers in this unit stack
         self.has_moved = False
-        self.pending_command = None # Command sent via pigeon
-        
-        # Travel state for multi-turn movement
-        self.travel_target = None
-        self.travel_remaining = 0
-        self.travel_command = None # Store the command to execute on arrival (e.g. move_attack)
+        self.pending_command = None
 
         # Event History
         self.history_log = []
@@ -40,14 +34,14 @@ class Unit:
 
     def observe_surroundings(self, game_state):
         """Passively observe adjacent tiles and log changes, including movements between visible tiles"""
-        if getattr(self, 'travel_remaining', 0) > 0:
+        if False:
             return
 
         # 1. Collect current counts for all neighbors
         observations = {} # {node_id: {owner: count}}
         for neighbor in self.node.neighbors:
             units_here = game_state.get_units_at(neighbor)
-            visible_units = [u for u in units_here if getattr(u, 'travel_remaining', 0) == 0]
+            visible_units = units_here
             current_counts = {}
             for u in visible_units:
                 current_counts[u.owner] = current_counts.get(u.owner, 0) + u.count
@@ -131,20 +125,17 @@ class GameState:
             self.enemy_castle_node.structure_owner = 1
         
         self.units = []
-        self.turn = 0  # 0 for player, 1 for AI (used internally during phase processing)
-        self.pigeons = []
-        self.pigeon_limit = [1, 1]
+        self.turn = 0  # 0 for player, 1 for AI
+        self.pending_orders = [None, None]
         self.turn_count = 1
         self.reports = [[], []]  # Reports only used for player (index 0)
-        self.returned_pigeons = [] # Track pigeons that just returned this turn
+        self.pending_reports = [[], []]
         
         # Phase Management
         self.phases = [
             "Information (Reports)",
             "Give Orders",
-            "Order Give/Receive",
-            "Pigeon Actions",
-            "Unit Actions",
+            "Execute Orders",
             "End of Turn"
         ]
         self.current_phase_index = 0
@@ -219,7 +210,7 @@ class GameState:
         for node in self.nodes:
             for owner in [0, 1]:
                 # Only merge units that are not currently traveling
-                units_here = [u for u in self.get_units_at(node) if u.owner == owner and (getattr(u, 'travel_remaining', 0) == 0)]
+                units_here = [u for u in self.get_units_at(node) if u.owner == owner]
                 if len(units_here) > 1:
                     total_count = sum(u.count for u in units_here)
                     # Keep the first unit, update its count, remove the others
@@ -258,71 +249,18 @@ class GameState:
         
         return 999  # Unreachable
 
-    def send_pigeon(self, player_id, unit, command_type, data=None):
-        active_pigeons = [p for p in self.pigeons if p.owner == player_id]
-        if len(active_pigeons) < self.pigeon_limit[player_id]:
-            source = self.player_castle_node if player_id == 0 else self.enemy_castle_node
-            travel_time = self.calculate_travel_time(source, unit.node)
-            new_pigeon = Pigeon(player_id, source, unit.node, {"type": command_type, "data": data}, units=[unit])
-            new_pigeon.turns_to_reach = travel_time
-            new_pigeon.total_turns = travel_time
-            self.pigeons.append(new_pigeon)
-            self.create_dispatch_report(player_id, new_pigeon, unit.node)
-            return True
-        return False
-
-    def send_pigeon_to_tile(self, player_id, target_node, command_type, data, count=None):
-        """Sends a pigeon to a specific tile to issue orders to any friendly units there."""
-        active_pigeons = [p for p in self.pigeons if p.owner == player_id]
-        if len(active_pigeons) < self.pigeon_limit[player_id]:
-            source = self.player_castle_node if player_id == 0 else self.enemy_castle_node
-            travel_time = self.calculate_travel_time(source, target_node)
-            command = {"type": command_type, "data": data}
-            if count is not None:
-                command["count"] = count
-            new_pigeon = Pigeon(player_id, source, target_node, command, units=[])
-            new_pigeon.turns_to_reach = travel_time
-            new_pigeon.total_turns = travel_time
-            self.pigeons.append(new_pigeon)
-            self.create_dispatch_report(player_id, new_pigeon, target_node)
-            return True
-        return False
-
-    def create_dispatch_report(self, player_id, pigeon, target_node):
-        """Creates an instant mini-report when a pigeon is dispatched."""
-        # Skip report generation for AI
-        if player_id == 1:
-            return
-        
-        # Even with distance 0, a pigeon takes at least 1 turn to deliver and 1 to return
-        # due to the phase-based movement (update in Phase 4, deliver/return in Phase 3).
-        effective_dist = max(1, pigeon.turns_to_reach)
-        return_time = effective_dist * 2  # Outbound + return trip
-        
-        cmd_type = pigeon.command.get('type', 'unknown')
-        source_tile = target_node.name
-        
-        lines = [f"Target: {source_tile}"]
-        
-        if cmd_type == 'move_attack':
-            move_target = pigeon.command.get('data')
-            target_tile = move_target.name if hasattr(move_target, 'name') else str(move_target)
-            lines.append(f"Task: Move -> {target_tile}")
-        elif cmd_type == 'report':
-            lines.append(f"Task: Scouting")
-        else:
-            lines.append(f"Task: {cmd_type.title()}")
+    def issue_order_to_tile(self, player_id, target_node, command_type, data, count=None):
+        """Issues exactly 1 order to a specific tile for the current turn."""
+        if self.pending_orders[player_id] is not None:
+            return False # Only 1 order per turn allowed
             
-        report = {
-            'position': target_node.name,
-            'turn_sent': self.turn_count,
-            'destination': target_node.name,
-            'task': cmd_type,
-            'available_turn': self.turn_count + return_time,
-            'message': "\n".join(lines),
-            'turn_received': self.turn_count  # Show immediately
-        }
-        self.reports[player_id].append(report)
+        command = {"type": command_type, "data": data, "target_node": target_node}
+        if count is not None:
+            command["count"] = count
+            
+        self.pending_orders[player_id] = command
+            
+        return True
 
     def resolve_combat(self, attackers, defenders):
         """Pairwise duel system: Each unit pairs up against an enemy unit. Both roll d6."""
@@ -360,7 +298,7 @@ class GameState:
             d_ready -= num_duels
             
             for _ in range(num_duels):
-                r_a = get_combat_roll(a_ratio, 9)
+                r_a = get_combat_roll(a_ratio, 10)
                 r_d = get_combat_roll(d_ratio, 10)
                 if r_a > r_d: # Attacker wins
                     a_survivors += 1
@@ -376,7 +314,7 @@ class GameState:
                 a_ready -= num_extra
                 d_temp_survivors = 0
                 for _ in range(num_extra):
-                    r_a = get_combat_roll(a_ratio, 9)
+                    r_a = get_combat_roll(a_ratio, 10)
                     r_d = get_combat_roll(d_ratio, 10)
                     if r_a > r_d: a_survivors += 1 # D survivor died
                     elif r_d > r_a: d_temp_survivors += 1 # A died
@@ -389,7 +327,7 @@ class GameState:
                 d_ready -= num_extra
                 a_temp_survivors = 0
                 for _ in range(num_extra):
-                    r_a = get_combat_roll(a_ratio, 9)
+                    r_a = get_combat_roll(a_ratio, 10)
                     r_d = get_combat_roll(d_ratio, 10)
                     if r_d > r_a: d_survivors += 1 # A survivor died
                     elif r_a > r_d: a_temp_survivors += 1 # D died
@@ -465,9 +403,6 @@ class GameState:
                 if move_count < unit.count:
                     # Create detachment
                     moving_unit = Unit(unit.owner, unit.unit_type, unit.node, count=move_count)
-                    # Do not copy history as it leads to duplication upon re-merge.
-                    # The split event provides sufficient context.
-                    
                     unit.count -= move_count
                     self.units.append(moving_unit)
                     
@@ -476,32 +411,31 @@ class GameState:
                 else:
                     moving_unit = unit
 
-                # Initiate multi-turn travel
-                travel_time = moving_unit.node.get_travel_time(target_node)
+                # Instant travel execution
                 moving_unit.travel_target = target_node
-                moving_unit.travel_remaining = travel_time
-                moving_unit.travel_command = command
-                
-                moving_unit.log_event("move_start", self.turn_count, f"Started move to {target_node.name} (ETA: {travel_time} turns)")
+                moving_unit.log_event("move_start", self.turn_count, f"Started move to {target_node.name}")
+                self.finalize_move_attack(moving_unit)
                 
         return None
 
     def finalize_move_attack(self, moving_unit):
-        """Actually performs the move/attack logic once travel is finished"""
+        """Actually performs the move/attack logic"""
         if moving_unit not in self.units:
             return
 
-        target_node = moving_unit.travel_target
+        target_node = getattr(moving_unit, 'travel_target', None)
+        if not target_node:
+            return
+
         moving_unit.log_event("move_arrive", self.turn_count, f"Arrived at {target_node.name}")
 
-        # Only fight with enemies already at the target node (not those also traveling elsewhere)
-        enemies = [u for u in self.get_units_at(target_node) if u.owner != moving_unit.owner and getattr(u, 'travel_remaining', 0) == 0]
+        enemies = [u for u in self.get_units_at(target_node) if u.owner != moving_unit.owner]
         
         if not enemies:
-            # Empty tile or only friendly/traveling units - just move in
+            # Empty tile or only friendly units - just move in
             moving_unit.node = target_node
-            # Merge with existing non-traveling friendly units at target
-            friendlies = [u for u in self.get_units_at(target_node) if u.owner == moving_unit.owner and u != moving_unit and getattr(u, 'travel_remaining', 0) == 0]
+            # Merge with existing friendly units at target
+            friendlies = [u for u in self.get_units_at(target_node) if u.owner == moving_unit.owner and u != moving_unit]
             if friendlies:
                 old_count = friendlies[0].count
                 friendlies[0].count += moving_unit.count
@@ -513,20 +447,19 @@ class GameState:
         else:
             # Enemy present - attack
             moving_unit.log_event("enemy_spotted", self.turn_count, f"Engaged enemy at {target_node.name}")
-            # Only the arriving unit fights (plus any non-traveling allies already at target)
-            allies_at_target = [u for u in self.get_units_at(target_node) if u.owner == moving_unit.owner and getattr(u, 'travel_remaining', 0) == 0]
+            allies_at_target = [u for u in self.get_units_at(target_node) if u.owner == moving_unit.owner]
             attackers = [moving_unit] + allies_at_target
             self.resolve_combat(attackers, enemies)
             
             # Check if any attackers survived and enemies are cleared
             if moving_unit in self.units or any(u in self.units for u in allies_at_target):
-                remaining_enemies = [u for u in self.get_units_at(target_node) if u.owner != moving_unit.owner and getattr(u, 'travel_remaining', 0) == 0]
+                remaining_enemies = [u for u in self.get_units_at(target_node) if u.owner != moving_unit.owner]
                 if not remaining_enemies:
                     # All enemies defeated - move in if survived
                     if moving_unit in self.units:
                         moving_unit.node = target_node
                         # Final check for merge after moving in
-                        friendlies = [u for u in self.get_units_at(target_node) if u.owner == moving_unit.owner and u != moving_unit and getattr(u, 'travel_remaining', 0) == 0]
+                        friendlies = [u for u in self.get_units_at(target_node) if u.owner == moving_unit.owner and u != moving_unit]
                         if friendlies:
                             old_count = friendlies[0].count
                             friendlies[0].count += moving_unit.count
@@ -535,12 +468,8 @@ class GameState:
                             if moving_unit in self.units:
                                 self.units.remove(moving_unit)
         
-        # Clear travel state if unit still exists
-        for u in self.units:
-            if u == moving_unit:
-                u.travel_target = None
-                u.travel_remaining = 0
-                u.travel_command = None
+        if hasattr(moving_unit, 'travel_target'):
+            delattr(moving_unit, 'travel_target')
 
     def advance_phase(self):
         """Advances the game to the next phase. Returns True if turn ended."""
@@ -548,8 +477,6 @@ class GameState:
         
         if self.current_phase_index >= len(self.phases):
             self.current_phase_index = 0
-            # If we reached the end of the turn process, we switch players
-            # This is handled by process_end_of_turn
             return True
             
         # Execute phase logic
@@ -557,137 +484,70 @@ class GameState:
         
         if phase == "Information (Reports)":
             self.process_reports_phase()
-        elif phase == "Order Give/Receive":
-            self.process_order_give_receive_phase()
-        elif phase == "Pigeon Actions":
-            self.process_pigeon_actions_phase()
-        elif phase == "Unit Actions":
-            self.process_unit_actions_phase()
+        elif phase == "Execute Orders":
+            self.process_execute_orders_phase()
         elif phase == "End of Turn":
             self.process_end_of_turn()
             
         return False
 
     def process_reports_phase(self):
-        """Phase 1: Process returning pigeons that have already arrived at the castle"""
-        self.returned_pigeons = []
-        for pigeon in self.pigeons[:]:
-            if pigeon.owner == self.turn and pigeon.returning:
-                if pigeon.arrived:
-                    # Only generate reports for player, skip for AI
-                    if pigeon.owner == 0 and pigeon.payload:
-                        pigeon.payload['turn_received'] = self.turn_count
-                        self.reports[pigeon.owner].append(pigeon.payload)
-                    self.returned_pigeons.append(pigeon)
-                    self.pigeons.remove(pigeon)
+        """Phase 1: Process reports that were requested last turn"""
+        for report in self.pending_reports[self.turn]:
+            report['turn_received'] = self.turn_count
+            self.reports[self.turn].append(report)
+        self.pending_reports[self.turn].clear()
 
-    def process_order_give_receive_phase(self):
-        """Phase 3: Order Give/Receive - Dispatch new orders and units receive arrived ones"""
-        # 1. Receive Arrived Orders
-        for pigeon in self.pigeons:
-            if pigeon.owner == self.turn and not pigeon.returning and pigeon.arrived and getattr(pigeon, 'dispatched', False):
-                
-                if pigeon.command['type'] == 'report':
-                    units_at_target = self.get_units_at(pigeon.target_node)
-                    friendly_count = sum(u.count for u in units_at_target if u.owner == pigeon.owner)
-                    
-                    if friendly_count == 0:
-                        pigeon.payload = {
-                            'position': pigeon.target_node.name,
-                            'message': "No friendly units present to provide a report.",
-                            'count': 0,
-                            'friendly_adjacent': [],
-                            'enemy_adjacent': []
-                        }
-                    else:
-                        enemy_count = sum(u.count for u in units_at_target if u.owner != pigeon.owner)
-                        
-                        friendly_adj = []
-                        enemy_adj = []
-                        for neighbor in pigeon.target_node.neighbors:
-                            n_units = self.get_units_at(neighbor)
-                            for u in n_units:
-                                if u.owner == pigeon.owner:
-                                    friendly_adj.append({'pos': neighbor.name, 'count': u.count})
-                                else:
-                                    enemy_adj.append({'pos': neighbor.name, 'count': u.count})
-                        
-                        pigeon.payload = {
-                            'position': pigeon.target_node.name,
-                            'is_report': True,
-                            'friendly_count': friendly_count,
-                            'enemy_count': enemy_count,
-                            'friendly_adjacent': friendly_adj,
-                            'enemy_adjacent': enemy_adj
-                        }
-                    
-                    travel_back_time = self.calculate_travel_time(pigeon.target_node, pigeon.source_node)
-                    pigeon.returning = True
-                    pigeon.arrived = False
-                    pigeon.turns_to_reach = travel_back_time 
-                    pigeon.total_turns = travel_back_time
-                    continue
-
-                # Pigeon has arrived at unit from previous turn's travel, deliver now
-                units_to_command = pigeon.units if pigeon.units else self.get_units_at(pigeon.target_node)
-                friendly_units = [u for u in units_to_command if u.owner == pigeon.owner]
-                
-                if friendly_units:
-                    for unit in friendly_units:
-                        if unit in self.units:
-                            unit.pending_command = pigeon.command
-                else:
-                    # No units found at target node
-                    pigeon.payload = {
-                        'position': pigeon.target_node.name,
-                        'message': "No units found at destination to execute order",
-                        'count': 0,
-                        'friendly_adjacent': [],
-                        'enemy_adjacent': []
-                    }
-                
-                # Immediately prepare for return trip using full path travel time (same as units)
-                travel_back_time = self.calculate_travel_time(pigeon.target_node, pigeon.source_node)
-                pigeon.returning = True
-                pigeon.arrived = False
-                pigeon.turns_to_reach = travel_back_time 
-                pigeon.total_turns = travel_back_time
+    def process_execute_orders_phase(self):
+        """Phase 3: Execute the pending order for the turn"""
+        order = self.pending_orders[self.turn]
+        self.pending_orders[self.turn] = None
         
-        # 2. Dispatch New Orders
-        for pigeon in self.pigeons:
-            if pigeon.owner == self.turn and not pigeon.returning and not getattr(pigeon, 'dispatched', False):
-                pigeon.dispatched = True
-
-    def process_pigeon_actions_phase(self):
-        """Phase 4: Update movement for all dispatched pigeons (outward or returning)"""
-        print(f"DEBUG: Processing Pigeon Actions for Turn {self.turn}")
-        for pigeon in self.pigeons[:]:
-            if pigeon.owner == self.turn and getattr(pigeon, 'dispatched', False):
-                print(f"DEBUG: Pigeon {pigeon.owner} updating movement. Progress: {pigeon.get_progress():.2f}")
-                pigeon.update()
-
-    def process_unit_actions_phase(self):
-        """Phase 5: Units execute their pending commands and progress their travel"""
-        print(f"DEBUG: Processing Unit Actions for Turn {self.turn}")
+        if not order:
+            return
+            
+        target_node = order["target_node"]
         
-        # 1. Start new actions for units with pending orders
-        for unit in self.units:
-            if unit.owner == self.turn and unit.pending_command:
-                print(f"DEBUG: Unit {unit.owner} starting command {unit.pending_command['type']}")
-                self.execute_command(unit, unit.pending_command)
-                unit.pending_command = None
-
-        # 2. Progress travel for all units belonging to the current player
-        # Use a list copy as finalize might remove units (merging or combat)
-        current_units = [u for u in self.units if u.owner == self.turn]
-        for unit in current_units:
-            if unit.travel_remaining > 0:
-                unit.travel_remaining -= 1
-                print(f"DEBUG: Unit {unit.owner} travel progress. Remaining: {unit.travel_remaining}")
-                if unit.travel_remaining == 0:
-                    print(f"DEBUG: Unit {unit.owner} arrived at target!")
-                    if unit.travel_command and unit.travel_command["type"] == "move_attack":
-                        self.finalize_move_attack(unit)
+        if order["type"] == "report":
+            units_at_target = self.get_units_at(target_node)
+            friendly_count = sum(u.count for u in units_at_target if u.owner == self.turn)
+            
+            if friendly_count == 0:
+                payload = {
+                    'position': target_node.name,
+                    'message': "No friendly units present to provide a report.",
+                    'count': 0,
+                    'friendly_adjacent': [],
+                    'enemy_adjacent': []
+                }
+            else:
+                enemy_count = sum(u.count for u in units_at_target if u.owner != self.turn)
+                friendly_adj = []
+                enemy_adj = []
+                for neighbor in target_node.neighbors:
+                    n_units = self.get_units_at(neighbor)
+                    for u in n_units:
+                        if u.owner == self.turn:
+                            friendly_adj.append({'pos': neighbor.name, 'count': u.count})
+                        else:
+                            enemy_adj.append({'pos': neighbor.name, 'count': u.count})
+                
+                payload = {
+                    'position': target_node.name,
+                    'is_report': True,
+                    'friendly_count': friendly_count,
+                    'enemy_count': enemy_count,
+                    'friendly_adjacent': friendly_adj,
+                    'enemy_adjacent': enemy_adj
+                }
+            
+            # Append to pending reports
+            self.pending_reports[self.turn].append(payload)
+                
+        elif order["type"] == "move_attack":
+            friendly_units = [u for u in self.get_units_at(target_node) if u.owner == self.turn]
+            if friendly_units:
+                self.execute_command(friendly_units[0], order)
 
     def process_end_of_turn(self):
         """Phase 6: Resource generation and end-of-side processing"""
