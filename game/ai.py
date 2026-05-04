@@ -319,20 +319,13 @@ class ConservativeAI(AIController):
 
         return orders
 
-class TutorialAI(AIController):
-    """
-    Tutorial AI:
-    - Static enemy with no AI.
-    """
-    def get_orders(self, game_state):
-        return []
+
 
 
 # Registry of available AI types
 AI_TYPES = {
     "Aggressive": AggressiveAI,
     "Conservative": ConservativeAI,
-    "Tutorial": TutorialAI,
 }
 
 def create_ai(ai_type="Aggressive"):

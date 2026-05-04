@@ -154,20 +154,9 @@ class GameState:
         u0.log_event("spawn", 1, f"Initial deployment at {self.player_castle_node.name}")
         self.units.append(u0)
         
-        if ai_type == "Tutorial":
-            u1_base = Unit(1, "Soldier", self.enemy_castle_node, count=5)
-            u1_base.log_event("spawn", 1, f"Initial deployment at {self.enemy_castle_node.name}")
-            self.units.append(u1_base)
-            
-            c_node = next((n for n in self.nodes if n.name == "C"), None)
-            if c_node:
-                u1_c = Unit(1, "Soldier", c_node, count=5)
-                u1_c.log_event("spawn", 1, f"Initial deployment at {c_node.name}")
-                self.units.append(u1_c)
-        else:
-            u1 = Unit(1, "Soldier", self.enemy_castle_node, count=10)
-            u1.log_event("spawn", 1, f"Initial deployment at {self.enemy_castle_node.name}")
-            self.units.append(u1)
+        u1 = Unit(1, "Soldier", self.enemy_castle_node, count=10)
+        u1.log_event("spawn", 1, f"Initial deployment at {self.enemy_castle_node.name}")
+        self.units.append(u1)
         
         self.update_visibility()
         self.merge_units()

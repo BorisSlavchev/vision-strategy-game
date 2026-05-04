@@ -223,7 +223,7 @@ class Game:
         self.voice_recording_enabled = False
         
         # AI Settings
-        self.ai_types = ["AI 1", "AI 2", "AI 3", "AI 4", "AI 5", "AI 6", "Tutorial"]
+        self.ai_types = ["AI 0", "AI 1", "AI 2", "AI 3", "AI 4", "AI 5", "AI 6"]
         self.selected_ai_index = 0
         
         # AI Thinking Animation
@@ -275,8 +275,8 @@ class Game:
         """Rebuild settings buttons with current map, AI type, and recording setting."""
         button_w, button_h = 200, 50
         ai_type = self.ai_types[self.selected_ai_index]
-        if ai_type == "Tutorial":
-            map_name = "cross (Locked)"
+        if ai_type == "AI 0":
+            map_name = "moba (Locked)"
         else:
             map_name = self.available_maps[self.selected_map_index] if self.available_maps else "none"
         rec_status = "On" if getattr(self, 'voice_recording_enabled', False) else "Off"
@@ -293,9 +293,9 @@ class Game:
         ai_label = self.ai_types[self.selected_ai_index]
         if ai_label in ["AI 1", "AI 2", "AI 3"]:
             actual_ai_type = "Conservative"
-        elif ai_label == "Tutorial":
-            actual_ai_type = "Tutorial"
-            map_name = "cross"
+        elif ai_label == "AI 0":
+            actual_ai_type = "Aggressive"
+            map_name = "moba"
         else:
             actual_ai_type = "Aggressive"
         self.state = GameState(mode=self.selected_mode, automated_phases=self.automated_phases, map_name=map_name, ai_type=actual_ai_type)
@@ -764,7 +764,7 @@ class Game:
                     self._rebuild_settings_buttons()
                 elif i == 2:
                     # Cycle through available maps
-                    if self.available_maps and self.ai_types[self.selected_ai_index] != "Tutorial":
+                    if self.available_maps and self.ai_types[self.selected_ai_index] != "AI 0":
                         self.selected_map_index = (self.selected_map_index + 1) % len(self.available_maps)
                         self._rebuild_settings_buttons()
                 elif i == 3:
