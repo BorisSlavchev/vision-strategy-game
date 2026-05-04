@@ -907,6 +907,20 @@ class Game:
 
                                     node = self.get_node_at_mouse(event.pos)
                                     if node:
+                                        if self.state.mode in ["God", "Fog"]:
+                                            has_allied_units = False
+                                            for unit in self.state.units:
+                                                if unit.node == node and unit.owner == 0:
+                                                    has_allied_units = True
+                                                    break
+                                            if not has_allied_units:
+                                                self.floating_messages.append({
+                                                    'text': "Requires Allied Units",
+                                                    'pos': event.pos,
+                                                    'life': 60
+                                                })
+                                                continue
+
                                         options = []
                                         
                                         # Uniform commands for all tiles to maintain uncertainty
