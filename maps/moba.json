@@ -1,170 +1,109 @@
 {
     "name": "Arena of Valor",
-    "description": "A tactical 3-lane map inspired by MOBA games. Features a Top, Mid, and Bottom lane with jungle paths connecting them.",
+    "description": "A symmetrical 3-lane MOBA map with top, mid, and bottom lanes plus jungle connectors.",
     "nodes": [
-        {
-            "id": 0,
-            "x": 0,
-            "y": 3,
-            "name": "A",
-            "structure": "Castle",
-            "structure_owner": 0
-        },
-        {
-            "id": 5,
-            "x": 2,
-            "y": 3,
-            "name": "B"
-        },
-        {
-            "id": 6,
-            "x": 4,
-            "y": 3,
-            "name": "C"
-        },
-        {
-            "id": 8,
-            "x": 1,
-            "y": 2,
-            "name": "D"
-        },
-        {
-            "id": 2,
-            "x": 0,
-            "y": 1,
-            "name": "E"
-        },
-        {
-            "id": 9,
-            "x": 2,
-            "y": 1,
-            "name": "F"
-        },
-        {
-            "id": 7,
-            "x": 4,
-            "y": 1,
-            "name": "G"
-        },
-        {
-            "id": 10,
-            "x": 3,
-            "y": 0,
-            "name": "H"
-        },
-        {
-            "id": 3,
-            "x": 0,
-            "y": -1,
-            "name": "I"
-        },
-        {
-            "id": 4,
-            "x": 2,
-            "y": -1,
-            "name": "J"
-        },
-        {
-            "id": 1,
-            "x": 4,
-            "y": -1,
-            "name": "K",
-            "structure": "Castle",
-            "structure_owner": 1
-        }
+        {"id": 0, "x": 0, "y": 2, "name": "A", "structure": "Castle", "structure_owner": 0},
+
+        {"id": 1, "x": 1, "y": 0, "name": "T1"},
+        {"id": 2, "x": 2, "y": 0, "name": "T2"},
+        {"id": 3, "x": 3, "y": 0, "name": "T3"},
+        {"id": 4, "x": 4, "y": 0, "name": "T4"},
+        {"id": 5, "x": 5, "y": 0, "name": "T5"},
+        {"id": 6, "x": 6, "y": 0, "name": "T6"},
+        {"id": 7, "x": 7, "y": 0, "name": "T7"},
+        {"id": 8, "x": 8, "y": 0, "name": "T8"},
+        {"id": 9, "x": 9, "y": 0, "name": "T9"},
+
+        {"id": 10, "x": 1, "y": 2, "name": "M1"},
+        {"id": 11, "x": 2, "y": 2, "name": "M2"},
+        {"id": 12, "x": 3, "y": 2, "name": "M3"},
+        {"id": 13, "x": 4, "y": 2, "name": "M4"},
+        {"id": 14, "x": 5, "y": 2, "name": "M5"},
+        {"id": 15, "x": 6, "y": 2, "name": "M6"},
+        {"id": 16, "x": 7, "y": 2, "name": "M7"},
+        {"id": 17, "x": 8, "y": 2, "name": "M8"},
+        {"id": 18, "x": 9, "y": 2, "name": "M9"},
+
+        {"id": 19, "x": 1, "y": 4, "name": "B1"},
+        {"id": 20, "x": 2, "y": 4, "name": "B2"},
+        {"id": 21, "x": 3, "y": 4, "name": "B3"},
+        {"id": 22, "x": 4, "y": 4, "name": "B4"},
+        {"id": 23, "x": 5, "y": 4, "name": "B5"},
+        {"id": 24, "x": 6, "y": 4, "name": "B6"},
+        {"id": 25, "x": 7, "y": 4, "name": "B7"},
+        {"id": 26, "x": 8, "y": 4, "name": "B8"},
+        {"id": 27, "x": 9, "y": 4, "name": "B9"},
+
+        {"id": 28, "x": 2, "y": 1, "name": "JT1"},
+        {"id": 29, "x": 4, "y": 1, "name": "JT2"},
+        {"id": 30, "x": 6, "y": 1, "name": "JT3"},
+        {"id": 31, "x": 8, "y": 1, "name": "JT4"},
+        {"id": 32, "x": 2, "y": 3, "name": "JB1"},
+        {"id": 33, "x": 4, "y": 3, "name": "JB2"},
+        {"id": 34, "x": 6, "y": 3, "name": "JB3"},
+        {"id": 35, "x": 8, "y": 3, "name": "JB4"},
+
+        {"id": 36, "x": 10, "y": 2, "name": "K", "structure": "Castle", "structure_owner": 1}
     ],
     "edges": [
-        {
-            "from": 0,
-            "to": 2,
-            "travel_time": 2
-        },
-        {
-            "from": 2,
-            "to": 3,
-            "travel_time": 2
-        },
-        {
-            "from": 3,
-            "to": 4,
-            "travel_time": 2
-        },
-        {
-            "from": 4,
-            "to": 1,
-            "travel_time": 2
-        },
-        {
-            "from": 0,
-            "to": 8,
-            "travel_time": 1
-        },
-        {
-            "from": 8,
-            "to": 9,
-            "travel_time": 1
-        },
-        {
-            "from": 9,
-            "to": 10,
-            "travel_time": 1
-        },
-        {
-            "from": 10,
-            "to": 1,
-            "travel_time": 1
-        },
-        {
-            "from": 0,
-            "to": 5,
-            "travel_time": 2
-        },
-        {
-            "from": 5,
-            "to": 6,
-            "travel_time": 2
-        },
-        {
-            "from": 6,
-            "to": 7,
-            "travel_time": 2
-        },
-        {
-            "from": 7,
-            "to": 1,
-            "travel_time": 2
-        },
-        {
-            "from": 2,
-            "to": 8,
-            "travel_time": 1
-        },
-        {
-            "from": 5,
-            "to": 8,
-            "travel_time": 1
-        },
-        {
-            "from": 4,
-            "to": 10,
-            "travel_time": 1
-        },
-        {
-            "from": 7,
-            "to": 10,
-            "travel_time": 1
-        },
-        {
-            "from": 3,
-            "to": 9,
-            "travel_time": 2
-        },
-        {
-            "from": 9,
-            "to": 6,
-            "travel_time": 2
-        }
+        {"from": 0, "to": 1, "travel_time": 2},
+        {"from": 1, "to": 2, "travel_time": 2},
+        {"from": 2, "to": 3, "travel_time": 2},
+        {"from": 3, "to": 4, "travel_time": 2},
+        {"from": 4, "to": 5, "travel_time": 2},
+        {"from": 5, "to": 6, "travel_time": 2},
+        {"from": 6, "to": 7, "travel_time": 2},
+        {"from": 7, "to": 8, "travel_time": 2},
+        {"from": 8, "to": 9, "travel_time": 2},
+        {"from": 9, "to": 36, "travel_time": 2},
+
+        {"from": 0, "to": 10, "travel_time": 1},
+        {"from": 10, "to": 11, "travel_time": 1},
+        {"from": 11, "to": 12, "travel_time": 1},
+        {"from": 12, "to": 13, "travel_time": 1},
+        {"from": 13, "to": 14, "travel_time": 1},
+        {"from": 14, "to": 15, "travel_time": 1},
+        {"from": 15, "to": 16, "travel_time": 1},
+        {"from": 16, "to": 17, "travel_time": 1},
+        {"from": 17, "to": 18, "travel_time": 1},
+        {"from": 18, "to": 36, "travel_time": 1},
+
+        {"from": 0, "to": 19, "travel_time": 2},
+        {"from": 19, "to": 20, "travel_time": 2},
+        {"from": 20, "to": 21, "travel_time": 2},
+        {"from": 21, "to": 22, "travel_time": 2},
+        {"from": 22, "to": 23, "travel_time": 2},
+        {"from": 23, "to": 24, "travel_time": 2},
+        {"from": 24, "to": 25, "travel_time": 2},
+        {"from": 25, "to": 26, "travel_time": 2},
+        {"from": 26, "to": 27, "travel_time": 2},
+        {"from": 27, "to": 36, "travel_time": 2},
+
+        {"from": 2, "to": 28, "travel_time": 1},
+        {"from": 28, "to": 11, "travel_time": 1},
+        {"from": 4, "to": 29, "travel_time": 1},
+        {"from": 29, "to": 13, "travel_time": 1},
+        {"from": 6, "to": 30, "travel_time": 1},
+        {"from": 30, "to": 15, "travel_time": 1},
+        {"from": 8, "to": 31, "travel_time": 1},
+        {"from": 31, "to": 17, "travel_time": 1},
+
+        {"from": 20, "to": 32, "travel_time": 1},
+        {"from": 32, "to": 11, "travel_time": 1},
+        {"from": 22, "to": 33, "travel_time": 1},
+        {"from": 33, "to": 13, "travel_time": 1},
+        {"from": 24, "to": 34, "travel_time": 1},
+        {"from": 34, "to": 15, "travel_time": 1},
+        {"from": 26, "to": 35, "travel_time": 1},
+        {"from": 35, "to": 17, "travel_time": 1},
+
+        {"from": 28, "to": 29, "travel_time": 2},
+        {"from": 29, "to": 30, "travel_time": 2},
+        {"from": 30, "to": 31, "travel_time": 2},
+        {"from": 32, "to": 33, "travel_time": 2},
+        {"from": 33, "to": 34, "travel_time": 2},
+        {"from": 34, "to": 35, "travel_time": 2}
     ],
     "player_castle": 0,
-    "enemy_castle": 1
+    "enemy_castle": 36
 }

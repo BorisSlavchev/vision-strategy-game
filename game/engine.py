@@ -1,121 +1,50 @@
-import math
 import os
 import random
 from collections import deque
 from .graph import create_grid, create_map_from_json
 from .ai import create_ai
 
+UNIT_TYPES = ("Warrior", "Archer", "Wizard")
+UNIT_TYPE_LETTER = {"Warrior": "W", "Archer": "A", "Wizard": "Z"}
+
+# Warrior beats Archer, Archer beats Wizard, Wizard beats Warrior
+RPS_BEATS = {
+    "Warrior": "Archer",
+    "Archer": "Wizard",
+    "Wizard": "Warrior",
+}
+
+
 class Unit:
-    def __init__(self, owner, unit_type, node, count=10):
-        self.owner = owner # 0 for player, 1 for enemy
+    def __init__(self, owner, unit_type, node, count=3):
+        self.owner = owner  # 0 for player, 1 for enemy
         self.unit_type = unit_type
         self.node = node
-        self.count = count # Number of soldiers in this unit stack
+        self.count = count
         self.has_moved = False
         self.pending_command = None
 
-        # Event History
-        self.history_log = []
-        self.last_observed = {} # {node_id: {'count': count, 'owner': owner}}
-
     def log_event(self, event_type, turn, details):
-        """Append a new event to the history log"""
-        self.history_log.append({
-            'type': event_type,
-            'turn': turn,
-            'details': details
-        })
+        pass
 
-    def get_and_clear_log(self):
-        """Returns the current log and empties it"""
-        log = self.history_log[:]
-        self.history_log = []
-        return log
-
-    def observe_surroundings(self, game_state):
-        """Passively observe adjacent tiles and log changes, including movements between visible tiles"""
-        if False:
-            return
-
-        # 1. Collect current counts for all neighbors
-        observations = {} # {node_id: {owner: count}}
-        for neighbor in self.node.neighbors:
-            units_here = game_state.get_units_at(neighbor)
-            visible_units = units_here
-            current_counts = {}
-            for u in visible_units:
-                current_counts[u.owner] = current_counts.get(u.owner, 0) + u.count
-            observations[neighbor.id] = current_counts
-
-        # 2. Process changes per owner
-        for owner in [0, 1]:
-            owner_label = "Ally" if owner == self.owner else "ENEMY"
-            departures = [] # (node_name, diff, remaining)
-            arrivals = []   # (node_name, diff, total)
-            
-            for neighbor in self.node.neighbors:
-                curr_count = observations[neighbor.id].get(owner, 0)
-                prev_count = self.last_observed.get(neighbor.id, {}).get(owner, 0)
-                
-                if curr_count < prev_count:
-                    departures.append((neighbor.name, prev_count - curr_count, curr_count))
-                elif curr_count > prev_count:
-                    arrivals.append((neighbor.name, curr_count - prev_count, curr_count))
-                elif curr_count > 0 and prev_count == 0:
-                    # This case handled by arrivals logic above, keeping as comment for clarity
-                    pass
-
-            # 3. Match movements between visible neighbors
-            used_arrivals = set()
-            used_departures = set()
-            
-            # Match exact counts first
-            for i, (d_node, d_diff, d_rem) in enumerate(departures):
-                for j, (a_node, a_diff, a_total) in enumerate(arrivals):
-                    if j not in used_arrivals and d_diff == a_diff:
-                        self.log_event(f"{owner_label.lower()}_move", game_state.turn_count,
-                                     f"Observed {d_diff} {owner_label}s moving from {d_node} to {a_node}")
-                        used_arrivals.add(j)
-                        used_departures.add(i)
-                        break
-            
-            # Log remaining departures
-            for i, (d_node, d_diff, d_rem) in enumerate(departures):
-                if i not in used_departures:
-                    # Try to see if there's any arrival that could be a destination (even if partial)
-                    possible_dest = [a[0] for j, a in enumerate(arrivals) if j not in used_arrivals]
-                    dest_str = f" towards {possible_dest[0]}" if possible_dest else " into the fog"
-                    remaining_str = f" ({d_rem} remain)" if d_rem > 0 else " (None remain)"
-                    self.log_event(f"{owner_label.lower()}_departure", game_state.turn_count,
-                                 f"Observed {d_diff} {owner_label}s leaving {d_node}{dest_str}{remaining_str}")
-
-            # Log remaining arrivals
-            for j, (a_node, a_diff, a_total) in enumerate(arrivals):
-                if j not in used_arrivals:
-                    self.log_event(f"{owner_label.lower()}_arrival", game_state.turn_count,
-                                 f"Observed {a_diff} {owner_label}s arriving at {a_node} (Total: {a_total})")
-
-        # 4. Update memory
-        for neighbor in self.node.neighbors:
-            self.last_observed[neighbor.id] = observations[neighbor.id]
 
 class GameState:
-    def __init__(self, mode="God", automated_phases=True, map_name="moba", ai_type="Balanced"):
-        self.automated_phases = automated_phases
+    def __init__(self, mode="God", map_name="moba", ai_type="Balanced", rng_seed=None, record_replay=True):
         self.map_name = map_name
-        
-        # AI Controller
         self.ai_controller = create_ai(ai_type)
         self.ai_type = ai_type
-        
-        # Load map from JSON
+
+        self.rng_seed = rng_seed if rng_seed is not None else random.randint(0, 2**31 - 1)
+        random.seed(self.rng_seed)
+        # Dedicated RNG for combat so replays stay in sync when AI decisions are skipped
+        self.rng = random.Random(self.rng_seed)
+
         maps_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), "maps")
         map_path = os.path.join(maps_dir, f"{map_name}.json")
-        
+
         if os.path.exists(map_path):
             self.nodes, self.player_castle_node, self.enemy_castle_node = create_map_from_json(map_path)
         else:
-            # Fallback to legacy grid
             self.nodes = create_grid(3, 3)
             self.player_castle_node = self.get_node(0, 0)
             self.enemy_castle_node = self.get_node(2, 2)
@@ -123,43 +52,33 @@ class GameState:
             self.player_castle_node.structure_owner = 0
             self.enemy_castle_node.structure = "Castle"
             self.enemy_castle_node.structure_owner = 1
-        
+
         self.units = []
         self.turn = 0  # 0 for player, 1 for AI
         self.pending_orders = [None, None]
+        self.has_acted = [False, False]  # one action per side per turn
         self.turn_count = 1
-        self.reports = [[], []]  # Reports only used for player (index 0)
-        self.pending_reports = [[], []]
-        
-        # Phase Management
-        self.phases = [
-            "Information (Reports)",
-            "Give Orders",
-            "Execute Orders",
-            "End of Turn"
-        ]
-        self.current_phase_index = 0
-        self.process_reports_phase()
-        self.advance_phase()
-        
-        # Game modes: "God", "Fog", "Realistic"
+
         self.mode = mode
         self.visible_nodes = [set(), set()]
-        
+        # intel_level[player][node] -> "full" | "silhouette"
+        self.intel_level = [{}, {}]
+
         self.game_over = False
         self.winner = None
-        
-        # Add starting units
-        u0 = Unit(0, "Soldier", self.player_castle_node, count=10)
-        u0.log_event("spawn", 1, f"Initial deployment at {self.player_castle_node.name}")
-        self.units.append(u0)
-        
-        u1 = Unit(1, "Soldier", self.enemy_castle_node, count=10)
-        u1.log_event("spawn", 1, f"Initial deployment at {self.enemy_castle_node.name}")
-        self.units.append(u1)
-        
+
+        # Replay recording
+        self.record_replay = record_replay
+        self.replay_actions = []
+
+        self._spawn_starting_units()
         self.update_visibility()
         self.merge_units()
+
+    def _spawn_starting_units(self):
+        for owner, castle in ((0, self.player_castle_node), (1, self.enemy_castle_node)):
+            for unit_type in UNIT_TYPES:
+                self.units.append(Unit(owner, unit_type, castle, count=3))
 
     def get_node(self, x, y):
         for node in self.nodes:
@@ -167,64 +86,45 @@ class GameState:
                 return node
         return None
 
+    def get_node_by_id(self, node_id):
+        for node in self.nodes:
+            if node.id == node_id:
+                return node
+        return None
+
     def get_units_at(self, node):
         return [unit for unit in self.units if unit.node == node]
 
-    def get_unit_report(self, unit):
-        """Returns dict with unit information for report display"""
-        report = {
-            'position': unit.node.name,
-            'count': unit.count,
-            'friendly_adjacent': [],
-            'enemy_adjacent': [],
-            'history': []
-        }
-        
-        # Immediate sightings for the report UI (not logged to history here as history is polled next)
-        for neighbor in unit.node.neighbors:
-            units_at_neighbor = self.get_units_at(neighbor)
-            for u in units_at_neighbor:
-                info = {'pos': neighbor.name, 'count': u.count}
-                if u.owner == unit.owner:
-                    report['friendly_adjacent'].append(info)
-                else:
-                    report['enemy_adjacent'].append(info)
-        
-        report['history'] = unit.get_and_clear_log()
-        return report
-
+    def get_unit_at(self, node, owner, unit_type):
+        for unit in self.get_units_at(node):
+            if unit.owner == owner and unit.unit_type == unit_type:
+                return unit
+        return None
 
     def merge_units(self):
-        """Merges all units of the same owner on the same node"""
+        """Merge stacks of the same owner and unit_type on the same node."""
         for node in self.nodes:
             for owner in [0, 1]:
-                # Only merge units that are not currently traveling
-                units_here = [u for u in self.get_units_at(node) if u.owner == owner]
-                if len(units_here) > 1:
-                    total_count = sum(u.count for u in units_here)
-                    # Keep the first unit, update its count, remove the others
+                for unit_type in UNIT_TYPES:
+                    units_here = [
+                        u for u in self.get_units_at(node)
+                        if u.owner == owner and u.unit_type == unit_type
+                    ]
+                    if len(units_here) <= 1:
+                        continue
                     main_unit = units_here[0]
-                    main_unit.count = total_count
-                    
-                    # Merge history logs and track counts
-                    merged_counts = []
-                    for extra_unit in units_here[1:]:
-                        merged_counts.append(str(extra_unit.count))
-                        main_unit.history_log.extend(extra_unit.history_log)
-                        if extra_unit in self.units:
-                            self.units.remove(extra_unit)
-                    
-                    counts_str = ", ".join(merged_counts)
-                    main_unit.log_event("merge", self.turn_count, f"Merged with {len(merged_counts)} groups ({counts_str}) at {node.name}. Total: {total_count}")
+                    for extra in units_here[1:]:
+                        main_unit.count += extra.count
+                        if extra in self.units:
+                            self.units.remove(extra)
 
     def calculate_travel_time(self, source, target):
-        """BFS to find shortest travel time between source and target."""
         if source == target:
             return 0
-        
+
         visited = {source: 0}
         queue = deque([(source, 0)])
-        
+
         while queue:
             node, time = queue.popleft()
             for neighbor in node.neighbors:
@@ -235,333 +135,390 @@ class GameState:
                 if neighbor not in visited or visited[neighbor] > new_time:
                     visited[neighbor] = new_time
                     queue.append((neighbor, new_time))
-        
-        return 999  # Unreachable
 
-    def issue_order_to_tile(self, player_id, target_node, command_type, data, count=None):
-        """Issues exactly 1 order to a specific tile for the current turn."""
-        if self.pending_orders[player_id] is not None:
-            return False # Only 1 order per turn allowed
-            
-        command = {"type": command_type, "data": data, "target_node": target_node}
+        return 999
+
+    def graph_distance(self, source, target):
+        """Hop count (unweighted BFS) between two nodes."""
+        if source == target:
+            return 0
+        visited = {source}
+        queue = deque([(source, 0)])
+        while queue:
+            node, dist = queue.popleft()
+            for neighbor in node.neighbors:
+                if neighbor == target:
+                    return dist + 1
+                if neighbor not in visited:
+                    visited.add(neighbor)
+                    queue.append((neighbor, dist + 1))
+        return 999
+
+    def issue_order_to_tile(self, player_id, target_node, command_type, data, count=None, unit_type=None):
+        """Issues exactly 1 order for the current turn."""
+        if self.has_acted[player_id] or self.pending_orders[player_id] is not None:
+            return False
+
+        command = {
+            "type": command_type,
+            "data": data,
+            "target_node": target_node,
+        }
         if count is not None:
             command["count"] = count
-            
+        if unit_type is not None:
+            command["unit_type"] = unit_type
+
         self.pending_orders[player_id] = command
-            
         return True
 
+    def execute_player_order_immediately(self):
+        """Execute the player's pending order right away (still one per turn)."""
+        if self.has_acted[0]:
+            return False
+        if self.pending_orders[0] is None:
+            return False
+        self.turn = 0
+        self.process_execute_orders(0)
+        self.has_acted[0] = True
+        self.merge_units()
+        self._check_win_condition()
+        self.update_visibility()
+        return True
+
+    @staticmethod
+    def _has_advantage(attacker_type, defender_type):
+        return RPS_BEATS.get(attacker_type) == defender_type
+
+    def _combat_roll(self, has_advantage, overcrowding_ratio):
+        sides = 10
+        if has_advantage:
+            roll = max(self.rng.randint(1, sides), self.rng.randint(1, sides))
+        else:
+            roll = self.rng.randint(1, sides)
+        if overcrowding_ratio > 0 and self.rng.random() < overcrowding_ratio:
+            roll = min(roll, self.rng.randint(1, sides))
+        return roll
+
     def resolve_combat(self, attackers, defenders):
-        """Pairwise duel system: Each unit pairs up against an enemy unit. Both roll d6."""
+        """Typed pairwise duels with RPS advantage (2d10 keep higher)."""
         if not attackers or not defenders:
             return
 
-        # Sum up total units on each side
-        a_total = sum(u.count for u in attackers)
-        d_total = sum(u.count for u in defenders)
-        
-        # Calculate overcrowding ratios
-        # Any soldier from a stack > 100 suffers disadvantage (2d6 take lower)
-        a_penalty_count = sum(u.count for u in attackers if u.count > 100)
-        d_penalty_count = sum(u.count for u in defenders if u.count > 100)
-        
-        # Probabilistic ratios for the totals
-        a_ratio = a_penalty_count / a_total if a_total > 0 else 0
-        d_ratio = d_penalty_count / d_total if d_total > 0 else 0
+        def expand(stacks):
+            fighters = []
+            for u in stacks:
+                for _ in range(u.count):
+                    fighters.append(u.unit_type)
+            return fighters
 
-        def get_combat_roll(ratio, sides):
-            if random.random() < ratio:
-                # Overcrowding penalty: disadvantage (roll 2 dice, take lower)
-                return min(random.randint(1, sides), random.randint(1, sides))
-            return random.randint(1, sides)
+        a_fighters = expand(attackers)
+        d_fighters = expand(defenders)
 
-        while a_total > 0 and d_total > 0:
-            a_ready = a_total
-            d_ready = d_total
-            a_survivors = 0
-            d_survivors = 0
-            
-            # 1. Main duels
-            num_duels = min(a_ready, d_ready)
-            a_ready -= num_duels
-            d_ready -= num_duels
-            
-            for _ in range(num_duels):
-                r_a = get_combat_roll(a_ratio, 10)
-                r_d = get_combat_roll(d_ratio, 10)
-                if r_a > r_d: # Attacker wins
-                    a_survivors += 1
-                elif r_d > r_a: # Defender wins
-                    d_survivors += 1
-                else: # Tie
-                    a_survivors += 1
-                    d_survivors += 1
-            
-            # 2. Extra units from A fight survivors of D
-            if a_ready > 0 and d_survivors > 0:
-                num_extra = min(a_ready, d_survivors)
-                a_ready -= num_extra
-                d_temp_survivors = 0
-                for _ in range(num_extra):
-                    r_a = get_combat_roll(a_ratio, 10)
-                    r_d = get_combat_roll(d_ratio, 10)
-                    if r_a > r_d: a_survivors += 1 # D survivor died
-                    elif r_d > r_a: d_temp_survivors += 1 # A died
-                    else: a_survivors += 1; d_temp_survivors += 1
-                d_survivors = d_temp_survivors + (d_survivors - num_extra)
+        a_total = len(a_fighters)
+        d_total = len(d_fighters)
+        if a_total == 0 or d_total == 0:
+            return
 
-            # 3. Extra units from D fight survivors of A
-            elif d_ready > 0 and a_survivors > 0:
-                num_extra = min(d_ready, a_survivors)
-                d_ready -= num_extra
-                a_temp_survivors = 0
-                for _ in range(num_extra):
-                    r_a = get_combat_roll(a_ratio, 10)
-                    r_d = get_combat_roll(d_ratio, 10)
-                    if r_d > r_a: d_survivors += 1 # A survivor died
-                    elif r_a > r_d: a_temp_survivors += 1 # D died
-                    else: d_survivors += 1; a_temp_survivors += 1
-                a_survivors = a_temp_survivors + (a_survivors - num_extra)
-            
-            # Any units that didn't fight at all because other side was fully engaged
-            a_survivors += a_ready
-            d_survivors += d_ready
-            
-            # Check for stagnation (no deaths in a round)
-            if a_survivors == a_total and d_survivors == d_total:
+        a_penalty = sum(u.count for u in attackers if u.count > 100)
+        d_penalty = sum(u.count for u in defenders if u.count > 100)
+        a_ratio = a_penalty / a_total if a_total else 0
+        d_ratio = d_penalty / d_total if d_total else 0
+
+        while a_fighters and d_fighters:
+            self.rng.shuffle(a_fighters)
+            self.rng.shuffle(d_fighters)
+
+            next_a = []
+            next_d = []
+            num_duels = min(len(a_fighters), len(d_fighters))
+            extras_a = a_fighters[num_duels:]
+            extras_d = d_fighters[num_duels:]
+
+            for i in range(num_duels):
+                a_type = a_fighters[i]
+                d_type = d_fighters[i]
+                r_a = self._combat_roll(self._has_advantage(a_type, d_type), a_ratio)
+                r_d = self._combat_roll(self._has_advantage(d_type, a_type), d_ratio)
+                if r_a > r_d:
+                    next_a.append(a_type)
+                elif r_d > r_a:
+                    next_d.append(d_type)
+                else:
+                    next_a.append(a_type)
+                    next_d.append(d_type)
+
+            if extras_a and next_d:
+                self.rng.shuffle(extras_a)
+                self.rng.shuffle(next_d)
+                num_extra = min(len(extras_a), len(next_d))
+                leftover_a = extras_a[num_extra:]
+                leftover_d = next_d[num_extra:]
+                survivors_a = list(next_a)
+                survivors_d = []
+                for i in range(num_extra):
+                    a_type = extras_a[i]
+                    d_type = next_d[i]
+                    r_a = self._combat_roll(self._has_advantage(a_type, d_type), a_ratio)
+                    r_d = self._combat_roll(self._has_advantage(d_type, a_type), d_ratio)
+                    if r_a > r_d:
+                        survivors_a.append(a_type)
+                    elif r_d > r_a:
+                        survivors_d.append(d_type)
+                    else:
+                        survivors_a.append(a_type)
+                        survivors_d.append(d_type)
+                next_a = survivors_a + leftover_a
+                next_d = survivors_d + leftover_d
+            elif extras_d and next_a:
+                self.rng.shuffle(extras_d)
+                self.rng.shuffle(next_a)
+                num_extra = min(len(extras_d), len(next_a))
+                leftover_d = extras_d[num_extra:]
+                leftover_a = next_a[num_extra:]
+                survivors_d = list(next_d)
+                survivors_a = []
+                for i in range(num_extra):
+                    d_type = extras_d[i]
+                    a_type = next_a[i]
+                    r_a = self._combat_roll(self._has_advantage(a_type, d_type), a_ratio)
+                    r_d = self._combat_roll(self._has_advantage(d_type, a_type), d_ratio)
+                    if r_d > r_a:
+                        survivors_d.append(d_type)
+                    elif r_a > r_d:
+                        survivors_a.append(a_type)
+                    else:
+                        survivors_d.append(d_type)
+                        survivors_a.append(a_type)
+                next_a = survivors_a + leftover_a
+                next_d = survivors_d + leftover_d
+            else:
+                next_a.extend(extras_a)
+                next_d.extend(extras_d)
+
+            if len(next_a) == len(a_fighters) and len(next_d) == len(d_fighters):
                 break
-                
-            a_total = a_survivors
-            d_total = d_survivors
+            a_fighters = next_a
+            d_fighters = next_d
 
-        # Update unit counts
-        def distribute_count(unit_list, new_total):
-            for u in unit_list:
-                u.count = 0
-            if unit_list and new_total > 0:
-                unit_list[0].count = new_total
-            
-            # Remove empty stacks
-            for u in unit_list[:]:
-                if u.count <= 0:
-                    if u in self.units: self.units.remove(u)
+        self._apply_survivor_counts(attackers, a_fighters)
+        self._apply_survivor_counts(defenders, d_fighters)
 
-        distribute_count(attackers, a_total)
-        distribute_count(defenders, d_total)
+    def _apply_survivor_counts(self, stacks, surviving_types):
+        """Write survivor counts back onto the given stacks by unit type."""
+        if not stacks:
+            return
 
-        # Log combat result
-        for u in attackers:
-            if u in self.units:
-                u.log_event("combat", self.turn_count, f"Combat result: {u.count} survivors")
-        for u in defenders:
-            if u in self.units:
-                u.log_event("combat", self.turn_count, f"Combat result: {u.count} survivors")
+        counts = {}
+        for t in surviving_types:
+            counts[t] = counts.get(t, 0) + 1
 
+        owner = stacks[0].owner
+        # Prefer keeping stacks on their current nodes; pick a home node for new types
+        home_node = stacks[0].node
+
+        # Zero existing participating stacks
+        by_type = {}
+        for u in stacks:
+            u.count = 0
+            by_type.setdefault(u.unit_type, u)
+
+        for unit_type, count in counts.items():
+            if unit_type in by_type:
+                by_type[unit_type].count = count
+            else:
+                # New type among survivors — attach to home node stack if one exists
+                existing = self.get_unit_at(home_node, owner, unit_type)
+                if existing:
+                    existing.count += count
+                else:
+                    nu = Unit(owner, unit_type, home_node, count=count)
+                    self.units.append(nu)
+
+        for u in list(stacks):
+            if u.count <= 0 and u in self.units:
+                self.units.remove(u)
     def update_visibility(self):
         for p in range(2):
             self.visible_nodes[p].clear()
+            self.intel_level[p].clear()
             castle = self.player_castle_node if p == 0 else self.enemy_castle_node
-            self.visible_nodes[p].add(castle)
-            
+
             if self.mode == "God":
                 for node in self.nodes:
                     self.visible_nodes[p].add(node)
+                    self.intel_level[p][node] = "full"
                 continue
-            
+
             if self.mode == "Realistic":
-                # In realistic mode, only see buildings owned by the player
                 for node in self.nodes:
                     if node.structure and node.structure_owner == p:
                         self.visible_nodes[p].add(node)
+                        self.intel_level[p][node] = "full"
                 continue
-                
-            # Fog mode: only see the vertex where the unit stands (no adjacent visibility)
+
+            # Fog: vision from own units and castle, up to 2 hops
+            sources = [castle]
             for unit in self.units:
-                if unit.owner == p:
-                    self.visible_nodes[p].add(unit.node)
+                if unit.owner == p and unit.node not in sources:
+                    sources.append(unit.node)
+
+            best_dist = {}
+            for source in sources:
+                queue = deque([(source, 0)])
+                local = {source: 0}
+                while queue:
+                    node, dist = queue.popleft()
+                    if node not in best_dist or dist < best_dist[node]:
+                        best_dist[node] = dist
+                    if dist >= 2:
+                        continue
+                    for neighbor in node.neighbors:
+                        nd = dist + 1
+                        if neighbor not in local or local[neighbor] > nd:
+                            local[neighbor] = nd
+                            queue.append((neighbor, nd))
+
+            for node, dist in best_dist.items():
+                if dist <= 2:
+                    self.visible_nodes[p].add(node)
+                    own_here = any(u.owner == p and u.node == node for u in self.units)
+                    if own_here or dist <= 1 or node == castle:
+                        self.intel_level[p][node] = "full"
+                    else:
+                        self.intel_level[p][node] = "silhouette"
+
+    def get_intel(self, player_id, node):
+        if self.mode == "God":
+            return "full"
+        return self.intel_level[player_id].get(node)
 
     def execute_command(self, unit, command):
-        if command["type"] == "move_attack":
-            target_node = command["data"]
-            if target_node in unit.node.neighbors:
-                requested_count = command.get("count", unit.count)
-                move_count = min(requested_count, unit.count)
-                if move_count <= 0: return None
+        if command["type"] != "move_attack":
+            return None
 
-                # Handle Split
-                if move_count < unit.count:
-                    # Create detachment
-                    moving_unit = Unit(unit.owner, unit.unit_type, unit.node, count=move_count)
-                    unit.count -= move_count
-                    self.units.append(moving_unit)
-                    
-                    unit.log_event("split", self.turn_count, f"Detached {move_count} units for move to {target_node.name}")
-                    moving_unit.log_event("split", self.turn_count, f"Detached from main force at {unit.node.name}")
-                else:
-                    moving_unit = unit
+        target_node = command["data"]
+        if target_node not in unit.node.neighbors:
+            return None
 
-                # Instant travel execution
-                moving_unit.travel_target = target_node
-                moving_unit.log_event("move_start", self.turn_count, f"Started move to {target_node.name}")
-                self.finalize_move_attack(moving_unit)
-                
+        requested_count = command.get("count", unit.count)
+        move_count = min(requested_count, unit.count)
+        if move_count <= 0:
+            return None
+
+        if move_count < unit.count:
+            moving_unit = Unit(unit.owner, unit.unit_type, unit.node, count=move_count)
+            unit.count -= move_count
+            self.units.append(moving_unit)
+        else:
+            moving_unit = unit
+
+        moving_unit.travel_target = target_node
+        self.finalize_move_attack(moving_unit)
         return None
 
     def finalize_move_attack(self, moving_unit):
-        """Actually performs the move/attack logic"""
         if moving_unit not in self.units:
             return
 
-        target_node = getattr(moving_unit, 'travel_target', None)
+        target_node = getattr(moving_unit, "travel_target", None)
         if not target_node:
             return
 
-        moving_unit.log_event("move_arrive", self.turn_count, f"Arrived at {target_node.name}")
-
         enemies = [u for u in self.get_units_at(target_node) if u.owner != moving_unit.owner]
-        
+
         if not enemies:
-            # Empty tile or only friendly units - just move in
             moving_unit.node = target_node
-            # Merge with existing friendly units at target
-            friendlies = [u for u in self.get_units_at(target_node) if u.owner == moving_unit.owner and u != moving_unit]
+            friendlies = [
+                u for u in self.get_units_at(target_node)
+                if u.owner == moving_unit.owner
+                and u.unit_type == moving_unit.unit_type
+                and u != moving_unit
+            ]
             if friendlies:
-                old_count = friendlies[0].count
                 friendlies[0].count += moving_unit.count
-                # Merge history logs
-                friendlies[0].history_log.extend(moving_unit.history_log)
-                friendlies[0].log_event("merge", self.turn_count, f"Merged {moving_unit.count} arriving soldiers with {old_count} stationed at {target_node.name}")
                 if moving_unit in self.units:
                     self.units.remove(moving_unit)
         else:
-            # Enemy present - attack
-            moving_unit.log_event("enemy_spotted", self.turn_count, f"Engaged enemy at {target_node.name}")
             allies_at_target = [u for u in self.get_units_at(target_node) if u.owner == moving_unit.owner]
             attackers = [moving_unit] + allies_at_target
             self.resolve_combat(attackers, enemies)
-            
-            # Check if any attackers survived and enemies are cleared
-            if moving_unit in self.units or any(u in self.units for u in allies_at_target):
-                remaining_enemies = [u for u in self.get_units_at(target_node) if u.owner != moving_unit.owner]
-                if not remaining_enemies:
-                    # All enemies defeated - move in if survived
+
+            remaining_enemies = [u for u in self.get_units_at(target_node) if u.owner != moving_unit.owner]
+            if not remaining_enemies and moving_unit in self.units and moving_unit.count > 0:
+                moving_unit.node = target_node
+                friendlies = [
+                    u for u in self.get_units_at(target_node)
+                    if u.owner == moving_unit.owner
+                    and u.unit_type == moving_unit.unit_type
+                    and u != moving_unit
+                ]
+                if friendlies:
+                    friendlies[0].count += moving_unit.count
                     if moving_unit in self.units:
-                        moving_unit.node = target_node
-                        # Final check for merge after moving in
-                        friendlies = [u for u in self.get_units_at(target_node) if u.owner == moving_unit.owner and u != moving_unit]
-                        if friendlies:
-                            old_count = friendlies[0].count
-                            friendlies[0].count += moving_unit.count
-                            friendlies[0].history_log.extend(moving_unit.history_log)
-                            friendlies[0].log_event("merge", self.turn_count, f"Merged {moving_unit.count} battle survivors with {old_count} stationed at {target_node.name}")
-                            if moving_unit in self.units:
-                                self.units.remove(moving_unit)
-        
-        if hasattr(moving_unit, 'travel_target'):
-            delattr(moving_unit, 'travel_target')
+                        self.units.remove(moving_unit)
 
-    def advance_phase(self):
-        """Advances the game to the next phase. Returns True if turn ended."""
-        self.current_phase_index += 1
-        
-        if self.current_phase_index >= len(self.phases):
-            self.current_phase_index = 0
-            return True
-            
-        # Execute phase logic
-        phase = self.phases[self.current_phase_index]
-        
-        if phase == "Information (Reports)":
-            self.process_reports_phase()
-        elif phase == "Execute Orders":
-            self.process_execute_orders_phase()
-        elif phase == "End of Turn":
-            self.process_end_of_turn()
-            
-        return False
+            self.merge_units()
 
-    def process_reports_phase(self):
-        """Phase 1: Process reports that were requested last turn"""
-        for report in self.pending_reports[self.turn]:
-            report['turn_received'] = self.turn_count
-            self.reports[self.turn].append(report)
-        self.pending_reports[self.turn].clear()
+        if hasattr(moving_unit, "travel_target"):
+            delattr(moving_unit, "travel_target")
+    def process_execute_orders(self, player_id):
+        """Execute the pending order for a side."""
+        order = self.pending_orders[player_id]
+        self.pending_orders[player_id] = None
 
-    def process_execute_orders_phase(self):
-        """Phase 3: Execute the pending order for the turn"""
-        order = self.pending_orders[self.turn]
-        self.pending_orders[self.turn] = None
-        
         if not order:
+            self._record_action(player_id, None)
+            self.has_acted[player_id] = True
             return
-            
-        target_node = order["target_node"]
-        
-        if order["type"] == "report":
-            units_at_target = self.get_units_at(target_node)
-            friendly_count = sum(u.count for u in units_at_target if u.owner == self.turn)
-            
-            if friendly_count == 0:
-                payload = {
-                    'position': target_node.name,
-                    'message': "No friendly units present to provide a report.",
-                    'count': 0,
-                    'friendly_adjacent': [],
-                    'enemy_adjacent': []
-                }
-            else:
-                enemy_count = sum(u.count for u in units_at_target if u.owner != self.turn)
-                friendly_adj = []
-                enemy_adj = []
-                for neighbor in target_node.neighbors:
-                    n_units = self.get_units_at(neighbor)
-                    for u in n_units:
-                        if u.owner == self.turn:
-                            friendly_adj.append({'pos': neighbor.name, 'count': u.count})
-                        else:
-                            enemy_adj.append({'pos': neighbor.name, 'count': u.count})
-                
-                payload = {
-                    'position': target_node.name,
-                    'is_report': True,
-                    'friendly_count': friendly_count,
-                    'enemy_count': enemy_count,
-                    'friendly_adjacent': friendly_adj,
-                    'enemy_adjacent': enemy_adj
-                }
-            
-            # Append to pending reports
-            self.pending_reports[self.turn].append(payload)
-                
-        elif order["type"] == "move_attack":
-            friendly_units = [u for u in self.get_units_at(target_node) if u.owner == self.turn]
+
+        self._record_action(player_id, order)
+        self.has_acted[player_id] = True
+
+        if order["type"] == "move_attack":
+            target_node = order["target_node"]
+            unit_type = order.get("unit_type")
+            friendly_units = [u for u in self.get_units_at(target_node) if u.owner == player_id]
+            if unit_type:
+                friendly_units = [u for u in friendly_units if u.unit_type == unit_type]
             if friendly_units:
                 self.execute_command(friendly_units[0], order)
 
-    def process_end_of_turn(self):
-        """Phase 6: Resource generation and end-of-side processing"""
-        # Only player units passively observe (AI has full vision)
-        if self.turn == 0:
-            for unit in self.units:
-                if unit.owner == 0:
-                    unit.observe_surroundings(self)
+    def _record_action(self, player_id, order):
+        if not self.record_replay:
+            return
+        if order is None:
+            self.replay_actions.append({
+                "turn": self.turn_count,
+                "side": player_id,
+                "command": None,
+            })
+            return
 
-        # Merge units to clean up map
+        dest = order.get("data")
+        self.replay_actions.append({
+            "turn": self.turn_count,
+            "side": player_id,
+            "command": order["type"],
+            "unit_type": order.get("unit_type"),
+            "from_node_id": order["target_node"].id if order.get("target_node") else None,
+            "to_node_id": dest.id if dest is not None else None,
+            "count": order.get("count"),
+        })
+
+    def process_end_of_turn(self, player_id):
         self.merge_units()
-
-        # Reset movement
         for unit in self.units:
-            if unit.owner == self.turn:
+            if unit.owner == player_id:
                 unit.has_moved = False
 
     def _check_win_condition(self):
-        """Check if the game has been won by either side."""
         p1_at_enemy_castle = [u for u in self.get_units_at(self.enemy_castle_node) if u.owner == 0]
         p2_at_player_castle = [u for u in self.get_units_at(self.player_castle_node) if u.owner == 1]
-        
+
         player_units = [u for u in self.units if u.owner == 0]
         enemy_units = [u for u in self.units if u.owner == 1]
-        
+
         if p1_at_enemy_castle:
             self.game_over = True
             self.winner = 0
@@ -575,51 +532,58 @@ class GameState:
             self.game_over = True
             self.winner = 1
 
-    def _process_side_phases(self):
-        """Process all phases from current position through End of Turn for self.turn side."""
-        while True:
-            self.advance_phase()
-            if self.current_phase_index == 0:
-                # Wrapped around — end of turn phase was processed
-                break
-
     def end_turn(self):
-        """Process both player and AI turns. Called when player presses SPACE."""
-        # --- Player's remaining phases ---
+        """End player turn (order already executed immediately, or noop) → AI → next turn."""
         self.turn = 0
-        self._process_side_phases()
-        
+        # Player may still have a pending order (edge case) or need a recorded skip
+        if self.pending_orders[0] is not None:
+            self.process_execute_orders(0)
+        elif not self.has_acted[0]:
+            self._record_action(0, None)
+            self.has_acted[0] = True
+
+        self.process_end_of_turn(0)
+        self._check_win_condition()
         if self.game_over:
+            self.update_visibility()
             return
 
-        # --- AI's full turn ---
         self.turn = 1
-        self.current_phase_index = 0
-        
-        # Process reports phase first to clear returned pigeons
-        self.process_reports_phase()
-        
-        # AI decides actions ("Give Orders" equivalent)
         self.ai_controller.take_turn(self)
-        
-        # Process AI's remaining phases (Order Give/Receive through End of Turn)
-        self._process_side_phases()
-        
-        # --- Advance to next turn ---
+        self.process_execute_orders(1)
+        self.process_end_of_turn(1)
+        self._check_win_condition()
+
         self.turn_count += 1
         self.turn = 0
-        
-        # Check win condition after both sides have acted
-        self._check_win_condition()
-        
-        if self.game_over:
-            return
-        
-        # Update visibility for the player's new turn
+        self.has_acted = [False, False]
         self.update_visibility()
-        
-        # Start player's new turn at phase 0
-        self.current_phase_index = 0
-        self.process_reports_phase()
-        self.advance_phase()  # Move to "Give Orders"
 
+    def apply_replay_action(self, action):
+        """Re-issue a recorded action for deterministic playback (does not re-record)."""
+        side = action["side"]
+        if action.get("command") is None:
+            self.pending_orders[side] = None
+            return
+
+        from_node = self.get_node_by_id(action["from_node_id"])
+        to_node = self.get_node_by_id(action["to_node_id"])
+        self.issue_order_to_tile(
+            side,
+            from_node,
+            action["command"],
+            to_node,
+            count=action.get("count"),
+            unit_type=action.get("unit_type"),
+        )
+
+    def get_replay_metadata(self):
+        return {
+            "rng_seed": self.rng_seed,
+            "map_name": self.map_name,
+            "mode": self.mode,
+            "ai_type": self.ai_type,
+            "actions": self.replay_actions,
+            "winner": self.winner,
+            "final_turn": self.turn_count,
+        }
